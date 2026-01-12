@@ -1,0 +1,112 @@
+============================================================
+WZHARITH MUSIC - PERFORMANCE STATISTICS REPORT
+============================================================
+
+## SUMMARY
+----------------------------------------
+Total Events:        31
+Total Songs Played:  155
+Unique Songs:        46
+Unique Artists:      37
+
+## EVENT TYPES
+----------------------------------------
+  Wedding: 29
+  Collab: 1
+  Corporate: 1
+
+## TOP 20 MOST PLAYED SONGS
+----------------------------------------
+   1. Can't Help Falling in Love - Elvis Presley
+      Played: 22x (71% of events)
+   2. Until I Found You - Stephen Sanchez
+      Played: 13x (42% of events)
+   3. Terima Kasih Cinta - Afgan
+      Played: 12x (39% of events)
+   4. A Thousand Years - Christina Perri
+      Played: 11x (35% of events)
+   5. Kaulah Segalanya - Ruth S
+      Played: 10x (32% of events)
+   6. Bukan Cinta Biasa - Siti Nurhaliza
+      Played: 10x (32% of events)
+   7. Perfect - Ed Sheeran
+      Played: 9x (29% of events)
+   8. Belaian Jiwa - Innuendo
+      Played: 8x (26% of events)
+   9. Endless Love - Lionel Richi
+      Played: 7x (23% of events)
+  10. Selawat Badar - Unknown
+      Played: 4x (13% of events)
+  11. Sedetik Lebih - Anuar Zain
+      Played: 4x (13% of events)
+  12. Sempurna - Alexandra & The Backbone
+      Played: 3x (10% of events)
+  13. Beautiful In White - Shane Filan
+      Played: 3x (10% of events)
+  14. Until I Found You - Unknown
+      Played: 2x (6% of events)
+  15. Nothings Gonna Change My Love For You - George Benson
+      Played: 2x (6% of events)
+  16. Gurindam Jiwa - R. Ismail & Rafeah Buang
+      Played: 2x (6% of events)
+  17. Keabadian Cinta - Anuar Zain
+      Played: 2x (6% of events)
+  18. Only - Lee Hi
+      Played: 2x (6% of events)
+  19. Make You Feel My Love - Adele
+      Played: 2x (6% of events)
+  20. Saloma - Selamat Pengantin Baru
+      Played: 1x (3% of events)
+
+## TOP 15 ARTISTS
+----------------------------------------
+   1. Elvis Presley: 22 songs
+   2. Stephen Sanchez: 13 songs
+   3. Afgan: 13 songs
+   5. Christina Perri: 11 songs
+   6. Ruth S: 10 songs
+   7. Siti Nurhaliza: 10 songs
+   8. Ed Sheeran: 9 songs
+   9. Innuendo: 8 songs
+  10. Lionel Richi: 7 songs
+  11. Anuar Zain: 6 songs
+  12. Alexandra & The Backbone: 3 songs
+  13. Shane Filan: 3 songs
+  14. George Benson: 2 songs
+  15. R. Ismail & Rafeah Buang: 2 songs
+
+## LANGUAGE DISTRIBUTION
+----------------------------------------
+  English Songs: 97 (62.6%)
+  Malay/Indo Songs: 58 (37.4%)
+
+## YEARLY PERFORMANCE
+----------------------------------------
+  2024: 14 events, 35 songs played
+  2025: 17 events, 120 songs played
+
+## YOUR SIGNATURE SONGS (50%+ of events)
+----------------------------------------
+  ★ Can't Help Falling in Love - Elvis Presley (71%)
+
+## SONGS TO POTENTIALLY EXPAND (played only 1-2 times)
+----------------------------------------
+  - A Thousand Years - Christina Perri (2) (1x)
+  - Al Iktiraf - Unknown (1x)
+  - Anugerah Terindah - Andmesh Kamaleng (1x)
+  - Bawalah Cintaku - Afgan (1x)
+  - Can't Help Falling in Love - Elvis Presley (3) (1x)
+  - Can't Help Falling in Love - Unknown (1x)
+  - Forever In Love - Kenny G (1x)
+  - Gurindam Jiwa - R. Ismail & Rafeah Buang (2x)
+  - Janam Janam - Unknown (1x)
+  - Keabadian Cinta - Anuar Zain (2x)
+  - Kisah Cinta Kita - Hafiz Suip (1x)
+  - Make You Feel My Love - Adele (2x)
+  - Malam Bulan Dipagar Bintang - P.Ramlee (1x)
+  - Mencintaimu - Krisdayanti (1x)
+  - My All - Mariah Carey (1x)
+
+============================================================
+Report generated: 2026-01-12 21:18:14
+============================================================
