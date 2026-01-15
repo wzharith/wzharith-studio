@@ -117,10 +117,24 @@
 
 ## Status
 
-**Registration Status**: ⏳ Pending
+**Registration Status**: ✅ COMPLETED
 
-**Date Started**: _____________
+**Date Started**: January 13, 2026
 
-**SSM Number**: _____________
+**SSM Number**: 202603015121 (KT0606402-U)
 
-**Registration Date**: _____________
+**Registration Date**: January 14, 2026
+
+**Valid Until**: January 13, 2028
+
+---
+
+## Bank Account
+
+**Bank**: Maybank SME First Account-i
+
+**Account Number**: 5686 0312 0447
+
+**Account Name**: WZHARITH STUDIO
+
+**Status**: ✅ Created (Pending Secure2u activation)

@@ -152,10 +152,22 @@ Full acoustic band experience with saxophone as featured instrument.
 
 ## Contact & Booking
 
-**WhatsApp**: [Your Number]
+**WhatsApp**: +60 17-404 7441
 **Instagram**: @wzharith
-**Email**: [Your Email]
-**Website**: [Coming Soon]
+**TikTok**: @wzharithh
+**YouTube**: @wzharith
+**Email**: wzharith.studio@gmail.com
+**Website**: https://wzharith.github.io/wzharith-studio/
+
+---
+
+## Bank Details
+
+**Bank**: Maybank
+**Account Name**: WZHARITH STUDIO
+**Account Number**: 5686 0312 0447
+
+**SSM**: 202603015121 (KT0606402-U)
 
 ---
 

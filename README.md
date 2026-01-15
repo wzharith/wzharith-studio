@@ -62,11 +62,25 @@ See [`docs/pricing_packages.md`](docs/pricing_packages.md) for current service p
 
 See [`docs/grant_applications.md`](docs/grant_applications.md) for available grants and funding.
 
+## Business Details
+
+```
+WZHARITH STUDIO
+SSM: 202603015121 (KT0606402-U)
+
+Bank: Maybank SME First Account-i
+Account No: 5686 0312 0447
+```
+
 ## Contact
 
-- **Instagram**: @wzharith
-- **Website**: Coming Soon
+- **WhatsApp**: +60 17-404 7441
+- **Email**: wzharith.studio@gmail.com
+- **Instagram**: [@wzharith](https://instagram.com/wzharith)
+- **TikTok**: [@wzharithh](https://tiktok.com/@wzharithh)
+- **YouTube**: [@wzharith](https://youtube.com/@wzharith)
+- **Website**: https://wzharith.github.io/wzharith-studio/
 
 ---
 
-© 2026 WZHarith Music. Made with ❤️ in Malaysia.
+© 2026 WZHarith Studio. Made with ❤️ in Malaysia.

@@ -315,7 +315,15 @@ ${data.message || 'None'}
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
             >
-              @wzharith
+              IG: @wzharith
+            </a>
+            <a
+              href="https://tiktok.com/@wzharithh"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
+            >
+              TikTok: @wzharithh
             </a>
           </div>
         </motion.div>

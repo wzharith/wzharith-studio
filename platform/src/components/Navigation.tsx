@@ -40,7 +40,7 @@ export default function Navigation() {
             <Music className="w-5 h-5 text-midnight-950" />
           </div>
           <span className="font-display text-xl font-semibold gold-text">
-            WZHarith
+            WZHarith Studio
           </span>
         </a>
 

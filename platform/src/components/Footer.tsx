@@ -1,6 +1,6 @@
 'use client';
 
-import { Music, Instagram, MessageCircle, Mail, Heart } from 'lucide-react';
+import { Music, Instagram, MessageCircle, Mail, Heart, Youtube } from 'lucide-react';
 
 const quickLinks = [
   { href: '#about', label: 'About' },
@@ -13,7 +13,8 @@ const quickLinks = [
 const socialLinks = [
   { icon: Instagram, href: 'https://instagram.com/wzharith', label: 'Instagram' },
   { icon: MessageCircle, href: 'https://wa.me/60174047441', label: 'WhatsApp' },
-  { icon: Mail, href: 'mailto:hello@wzharith.com', label: 'Email' },
+  { icon: Mail, href: 'mailto:wzharith.studio@gmail.com', label: 'Email' },
+  { icon: Youtube, href: 'https://youtube.com/@wzharith', label: 'YouTube' },
 ];
 
 export default function Footer() {
@@ -28,12 +29,15 @@ export default function Footer() {
                 <Music className="w-5 h-5 text-midnight-950" />
               </div>
               <span className="font-display text-xl font-semibold gold-text">
-                WZHarith Music
+                WZHarith Studio
               </span>
             </a>
             <p className="font-body text-midnight-400 max-w-sm mb-6">
               Professional live saxophone performance for weddings and events
               in Malaysia. Creating magical musical moments since 2024.
+            </p>
+            <p className="font-sans text-xs text-midnight-500 mb-4">
+              SSM: 202603015121 (KT0606402-U)
             </p>
             <div className="flex gap-3">
               {socialLinks.map((link) => (
@@ -80,11 +84,11 @@ export default function Footer() {
                 +60 17-404 7441
               </a>
               <a
-                href="mailto:hello@wzharith.com"
+                href="mailto:wzharith.studio@gmail.com"
                 className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
               >
                 <Mail className="w-4 h-4" />
-                hello@wzharith.com
+                wzharith.studio@gmail.com
               </a>
               <a
                 href="https://instagram.com/wzharith"
@@ -93,6 +97,12 @@ export default function Footer() {
                 <Instagram className="w-4 h-4" />
                 @wzharith
               </a>
+              <a
+                href="https://tiktok.com/@wzharithh"
+                className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
+              >
+                🎵 TikTok: @wzharithh
+              </a>
             </div>
           </div>
         </div>
@@ -100,7 +110,7 @@ export default function Footer() {
         {/* Bottom */}
         <div className="pt-8 border-t border-midnight-800 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-sans text-xs text-midnight-500">
-            © {new Date().getFullYear()} WZHarith Music. All rights reserved.
+            © {new Date().getFullYear()} WZHarith Studio (SSM: KT0606402-U). All rights reserved.
           </p>
           <p className="font-sans text-xs text-midnight-500 flex items-center gap-1">
             Made with <Heart className="w-3 h-3 text-gold-500" /> in Malaysia
