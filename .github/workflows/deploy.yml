@@ -35,6 +35,8 @@ jobs:
 
       - name: Build
         working-directory: ./platform
+        env:
+          NEXT_PUBLIC_INVOICE_PASSWORD: ${{ secrets.INVOICE_PASSWORD }}
         run: npm run build
 
       - name: Upload artifact

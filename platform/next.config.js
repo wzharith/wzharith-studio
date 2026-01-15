@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const isProd = process.env.NODE_ENV === 'production';
+
 const nextConfig = {
   reactStrictMode: true,
   images: {
@@ -6,10 +8,9 @@ const nextConfig = {
   },
   // Static export for GitHub Pages
   output: 'export',
-  // If deploying to username.github.io, leave basePath empty
-  // If deploying to username.github.io/repo-name, set basePath to '/repo-name'
-  basePath: '/wzharith-studio',
-  assetPrefix: '/wzharith-studio/',
+  // Only use basePath in production (GitHub Pages)
+  basePath: isProd ? '/wzharith-studio' : '',
+  assetPrefix: isProd ? '/wzharith-studio/' : '',
   trailingSlash: true,
 }
 
