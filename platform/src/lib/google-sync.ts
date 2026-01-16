@@ -104,6 +104,64 @@ export const isGoogleSyncEnabled = (): boolean => {
 };
 
 /**
+ * Latest invoice number response from Apps Script
+ */
+export interface LatestInvoiceNumber {
+  success: boolean;
+  nextQuotation: string;
+  nextInvoice: string;
+  latestQuoNum: number;
+  latestInvNum: number;
+  error?: string;
+}
+
+/**
+ * Fetch the latest invoice/quotation numbers from Google Sheets
+ */
+export const fetchLatestInvoiceNumber = async (): Promise<LatestInvoiceNumber> => {
+  const year = new Date().getFullYear();
+  const fallback: LatestInvoiceNumber = {
+    success: false,
+    nextQuotation: `QUO-${year}-001`,
+    nextInvoice: `INV-${year}-001`,
+    latestQuoNum: 0,
+    latestInvNum: 0,
+  };
+
+  if (!isGoogleSyncEnabled()) {
+    console.log('[InvoiceNumber] Google sync not configured, using fallback');
+    return fallback;
+  }
+
+  try {
+    const url = `${GOOGLE_SCRIPT_URL}?action=getLatestInvoiceNumber`;
+    console.log('[InvoiceNumber] Fetching from:', url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log('[InvoiceNumber] Got:', data);
+      return {
+        success: true,
+        nextQuotation: data.nextQuotation || fallback.nextQuotation,
+        nextInvoice: data.nextInvoice || fallback.nextInvoice,
+        latestQuoNum: data.latestQuoNum || 0,
+        latestInvNum: data.latestInvNum || 0,
+      };
+    }
+
+    return fallback;
+  } catch (error) {
+    console.error('[InvoiceNumber] Error:', error);
+    return fallback;
+  }
+};
+
+/**
  * Sync status type for UI
  */
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
@@ -406,6 +464,109 @@ export const updateInvoiceStatus = async (
     return { success: true };
   } catch (error) {
     console.error('Error updating status:', error);
+    return { success: false, error: String(error) };
+  }
+};
+
+// =============================================================================
+// CONFIG MANAGEMENT
+// =============================================================================
+
+export interface SiteConfigData {
+  business_name?: string;
+  business_tagline?: string;
+  business_ssm?: string;
+  contact_phone?: string;
+  contact_email?: string;
+  contact_whatsapp?: string;
+  social_instagram?: string;
+  social_tiktok?: string;
+  social_youtube?: string;
+  social_facebook?: string;
+  banking_bank?: string;
+  banking_accountName?: string;
+  banking_accountNumber?: string;
+  packages?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    price: number;
+    duration: string;
+  }>;
+  addons?: Array<{
+    id: string;
+    name: string;
+    price: number;
+  }>;
+  transport_baseCharge?: number;
+  transport_perKmRate?: number;
+  transport_freeZone?: string;
+  terms_depositPercent?: number;
+  terms_balanceDueDays?: number;
+  terms_cancellationPolicy?: string;
+  terms_latePayment?: string;
+}
+
+/**
+ * Fetch configuration from Google Sheets
+ */
+export const fetchConfig = async (): Promise<{ success: boolean; config: SiteConfigData; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    return { success: false, config: {}, error: 'Google sync not configured' };
+  }
+
+  try {
+    const url = `${GOOGLE_SCRIPT_URL}?action=getConfig`;
+    console.log('[Config] Fetching from:', url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log('[Config] Got:', data);
+      return {
+        success: true,
+        config: data.config || {},
+      };
+    }
+
+    return { success: false, config: {}, error: 'Failed to fetch config' };
+  } catch (error) {
+    console.error('[Config] Error:', error);
+    return { success: false, config: {}, error: String(error) };
+  }
+};
+
+/**
+ * Save configuration to Google Sheets
+ */
+export const saveConfigToGoogle = async (config: SiteConfigData): Promise<{ success: boolean; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    return { success: false, error: 'Google sync not configured' };
+  }
+
+  try {
+    const params = new URLSearchParams({
+      action: 'saveConfig',
+      data: JSON.stringify(config),
+    });
+
+    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return { success: result.success, error: result.error };
+    }
+
+    return { success: false, error: 'Failed to save config' };
+  } catch (error) {
+    console.error('[Config] Save error:', error);
     return { success: false, error: String(error) };
   }
 };

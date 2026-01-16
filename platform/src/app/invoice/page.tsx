@@ -10,6 +10,7 @@ import {
   syncAllInvoices,
   isGoogleSyncEnabled,
   fetchInvoicesFromCloud,
+  fetchLatestInvoiceNumber,
   type StoredInvoice as GoogleStoredInvoice,
   type SyncStatus,
 } from '@/lib/google-sync';
@@ -78,10 +79,13 @@ export default function InvoiceGenerator() {
 
   // History panel
   const [showHistory, setShowHistory] = useState(false);
+  const [historyTab, setHistoryTab] = useState<'active' | 'deleted'>('active');
   const [savedInvoices, setSavedInvoices] = useState<StoredInvoice[]>([]);
 
-  // Filter out soft-deleted invoices for display
-  const visibleInvoices = savedInvoices.filter(inv => !inv.deletedAt);
+  // Filter invoices for display
+  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt);
+  const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt);
+  const visibleInvoices = historyTab === 'active' ? activeInvoices : deletedInvoices;
 
   // Track currently loaded invoice for updates
   const [currentLoadedId, setCurrentLoadedId] = useState<string | null>(null);
@@ -101,6 +105,12 @@ export default function InvoiceGenerator() {
     setIsLoading(false); // Done checking
   }, []);
 
+  // Track latest invoice numbers from cloud
+  const [latestNumbers, setLatestNumbers] = useState<{
+    nextQuotation: string;
+    nextInvoice: string;
+  } | null>(null);
+
   // Load invoices: fetch from cloud first, fallback to localStorage
   useEffect(() => {
     const loadInvoices = async () => {
@@ -119,32 +129,43 @@ export default function InvoiceGenerator() {
         setSyncStatus('syncing');
 
         try {
-          const result = await fetchInvoicesFromCloud();
+          // Fetch invoices and latest number in parallel
+          const [invoicesResult, numbersResult] = await Promise.all([
+            fetchInvoicesFromCloud(),
+            fetchLatestInvoiceNumber(),
+          ]);
 
-          if (result.success && result.invoices.length > 0) {
+          // Handle invoices
+          if (invoicesResult.success && invoicesResult.invoices.length > 0) {
             // Cloud data takes priority - merge with any local-only items
-            const cloudIds = new Set(result.invoices.map(inv => inv.invoiceNumber));
+            const cloudIds = new Set(invoicesResult.invoices.map(inv => inv.invoiceNumber));
             const localOnly = localInvoices.filter(inv => !cloudIds.has(inv.invoiceNumber));
 
-            const mergedInvoices = [...result.invoices as StoredInvoice[], ...localOnly];
+            const mergedInvoices = [...invoicesResult.invoices as StoredInvoice[], ...localOnly];
             setSavedInvoices(mergedInvoices);
 
             // Update localStorage with merged data
             localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedInvoices));
-
-            setSyncStatus('synced');
-            setLastSyncTime(new Date());
-          } else if (result.success && result.invoices.length === 0) {
+          } else if (invoicesResult.success && invoicesResult.invoices.length === 0) {
             // Cloud is empty, push local to cloud
             if (localInvoices.length > 0) {
               await syncAllInvoices(localInvoices as GoogleStoredInvoice[]);
             }
-            setSyncStatus('synced');
-            setLastSyncTime(new Date());
-          } else {
-            // Fetch failed, stay with local data
-            setSyncStatus('offline');
           }
+
+          // Handle invoice numbers
+          if (numbersResult.success) {
+            setLatestNumbers({
+              nextQuotation: numbersResult.nextQuotation,
+              nextInvoice: numbersResult.nextInvoice,
+            });
+            // Set the invoice number to the next available quotation number
+            setInvoiceNumber(numbersResult.nextQuotation);
+            console.log('[InvoiceNumber] Set to:', numbersResult.nextQuotation);
+          }
+
+          setSyncStatus('synced');
+          setLastSyncTime(new Date());
         } catch (error) {
           console.error('Error loading from cloud:', error);
           setSyncStatus('offline');
@@ -180,10 +201,17 @@ export default function InvoiceGenerator() {
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
 
   // Update number prefix when type changes
-  const updateDocumentNumber = (type: 'quotation' | 'invoice') => {
-    const prefix = type === 'quotation' ? 'QUO' : 'INV';
-    const currentNum = invoiceNumber.split('-').pop() || '001';
-    setInvoiceNumber(`${prefix}-${new Date().getFullYear()}-${currentNum}`);
+  const updateDocumentNumber = async (type: 'quotation' | 'invoice') => {
+    // If we have latestNumbers from cloud, use them
+    if (latestNumbers) {
+      const nextNumber = type === 'quotation' ? latestNumbers.nextQuotation : latestNumbers.nextInvoice;
+      setInvoiceNumber(nextNumber);
+    } else {
+      // Fallback: just change the prefix
+      const prefix = type === 'quotation' ? 'QUO' : 'INV';
+      const currentNum = invoiceNumber.split('-').pop() || '001';
+      setInvoiceNumber(`${prefix}-${new Date().getFullYear()}-${currentNum}`);
+    }
     setDocumentType(type);
   };
 
@@ -362,6 +390,9 @@ export default function InvoiceGenerator() {
     }
 
     alert(`${documentType === 'quotation' ? 'Quotation' : 'Invoice'} saved!`);
+
+    // Invalidate latest numbers so next "New" gets fresh numbers
+    setLatestNumbers(null);
   };
 
   // Convert quotation to invoice (updates same record, no duplicate)
@@ -382,16 +413,34 @@ export default function InvoiceGenerator() {
   };
 
   // Start new document (clear form)
-  const startNew = () => {
-    const prefix = 'QUO';
-    // Find highest number used
-    const existingNumbers = savedInvoices
-      .filter(inv => inv.invoiceNumber.startsWith(prefix))
-      .map(inv => parseInt(inv.invoiceNumber.split('-').pop() || '0'));
-    const nextNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+  const startNew = async () => {
+    // Try to get latest number from cloud
+    let nextNumber = latestNumbers?.nextQuotation;
+
+    if (!nextNumber && isGoogleSyncEnabled()) {
+      // Fetch fresh if not cached
+      const result = await fetchLatestInvoiceNumber();
+      if (result.success) {
+        nextNumber = result.nextQuotation;
+        setLatestNumbers({
+          nextQuotation: result.nextQuotation,
+          nextInvoice: result.nextInvoice,
+        });
+      }
+    }
+
+    if (!nextNumber) {
+      // Fallback to local calculation
+      const prefix = 'QUO';
+      const existingNumbers = savedInvoices
+        .filter(inv => inv.invoiceNumber.startsWith(prefix))
+        .map(inv => parseInt(inv.invoiceNumber.split('-').pop() || '0'));
+      const nextNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+      nextNumber = `${prefix}-${new Date().getFullYear()}-${String(nextNum).padStart(3, '0')}`;
+    }
 
     setDocumentType('quotation');
-    setInvoiceNumber(`${prefix}-${new Date().getFullYear()}-${String(nextNum).padStart(3, '0')}`);
+    setInvoiceNumber(nextNumber);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
     setClientName('');
     setClientPhone('');
@@ -436,7 +485,7 @@ export default function InvoiceGenerator() {
 
   // Delete invoice from history
   const deleteInvoice = (id: string) => {
-    if (confirm('Delete this record? (It will be hidden but can be recovered from Google Sheets)')) {
+    if (confirm('Delete this record? (It will be moved to Deleted tab and can be restored)')) {
       // Soft delete: mark as deleted instead of removing
       const updated = savedInvoices.map(inv =>
         inv.id === id ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const } : inv
@@ -459,6 +508,41 @@ export default function InvoiceGenerator() {
           })
           .catch(() => setSyncStatus('error'));
       }
+    }
+  };
+
+  // Restore a soft-deleted invoice
+  const restoreInvoice = (id: string) => {
+    const updated = savedInvoices.map(inv =>
+      inv.id === id ? { ...inv, deletedAt: undefined, status: 'draft' as const } : inv
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    setSavedInvoices(updated);
+
+    // Sync restoration to Google Sheets
+    const restoredInvoice = updated.find(inv => inv.id === id);
+    if (restoredInvoice && isGoogleSyncEnabled()) {
+      setSyncStatus('syncing');
+      saveInvoiceToGoogle(restoredInvoice as GoogleStoredInvoice)
+        .then((result) => {
+          if (result.success) {
+            setSyncStatus('synced');
+            setLastSyncTime(new Date());
+          } else {
+            setSyncStatus('error');
+          }
+        })
+        .catch(() => setSyncStatus('error'));
+    }
+  };
+
+  // Permanently delete an invoice
+  const permanentlyDeleteInvoice = (id: string) => {
+    if (confirm('Permanently delete this record? This cannot be undone.')) {
+      const updated = savedInvoices.filter(inv => inv.id !== id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      setSavedInvoices(updated);
+      // Note: This doesn't delete from Google Sheets - manual cleanup needed
     }
   };
 
@@ -779,7 +863,7 @@ export default function InvoiceGenerator() {
                 className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
               >
                 <History className="w-4 h-4" />
-                History ({visibleInvoices.length})
+                History ({activeInvoices.length})
               </button>
               <button
                 onClick={handleSyncToGoogle}
@@ -941,7 +1025,7 @@ export default function InvoiceGenerator() {
               className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
             >
               <History className="w-3 h-3" />
-              {visibleInvoices.length}
+              {activeInvoices.length}
             </button>
             {isGoogleSyncEnabled() && (
               <button
@@ -1598,25 +1682,51 @@ export default function InvoiceGenerator() {
               </button>
             </div>
 
-            {/* Stats Summary */}
-            <div className="bg-slate-50 px-6 py-4 border-b grid grid-cols-3 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-slate-800">{visibleInvoices.length}</div>
-                <div className="text-xs text-slate-500">Total</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-emerald-600">
-                  {visibleInvoices.filter(i => i.status === 'paid').length}
-                </div>
-                <div className="text-xs text-slate-500">Paid</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-amber-600">
-                  RM {visibleInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
-                </div>
-                <div className="text-xs text-slate-500">Total Value</div>
-              </div>
+            {/* Tabs */}
+            <div className="flex border-b">
+              <button
+                onClick={() => setHistoryTab('active')}
+                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
+                  historyTab === 'active'
+                    ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                Active ({activeInvoices.length})
+              </button>
+              <button
+                onClick={() => setHistoryTab('deleted')}
+                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
+                  historyTab === 'deleted'
+                    ? 'text-red-600 border-b-2 border-red-500 bg-red-50'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                Deleted ({deletedInvoices.length})
+              </button>
             </div>
+
+            {/* Stats Summary - only show for active tab */}
+            {historyTab === 'active' && (
+              <div className="bg-slate-50 px-6 py-4 border-b grid grid-cols-3 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-slate-800">{activeInvoices.length}</div>
+                  <div className="text-xs text-slate-500">Total</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-600">
+                    {activeInvoices.filter(i => i.status === 'paid').length}
+                  </div>
+                  <div className="text-xs text-slate-500">Paid</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-amber-600">
+                    RM {activeInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-slate-500">Total Value</div>
+                </div>
+              </div>
+            )}
 
             {/* Invoice List */}
             <div className="flex-1 overflow-y-auto">
@@ -1678,19 +1788,41 @@ export default function InvoiceGenerator() {
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => loadInvoice(invoice)}
-                          className="flex-1 flex items-center justify-center gap-2 text-amber-600 hover:bg-amber-50 py-2 px-3 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                          Load & Edit
-                        </button>
-                        <button
-                          onClick={() => deleteInvoice(invoice.id)}
-                          className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {historyTab === 'active' ? (
+                          <>
+                            <button
+                              onClick={() => loadInvoice(invoice)}
+                              className="flex-1 flex items-center justify-center gap-2 text-amber-600 hover:bg-amber-50 py-2 px-3 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                              Load & Edit
+                            </button>
+                            <button
+                              onClick={() => deleteInvoice(invoice.id)}
+                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Move to Deleted"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => restoreInvoice(invoice.id)}
+                              className="flex-1 flex items-center justify-center gap-2 text-emerald-600 hover:bg-emerald-50 py-2 px-3 rounded-lg border border-emerald-200 text-sm font-medium transition-colors"
+                            >
+                              <RefreshCw className="w-4 h-4" />
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => permanentlyDeleteInvoice(invoice.id)}
+                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Permanently Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}

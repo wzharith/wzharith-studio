@@ -60,6 +60,12 @@ function doGet(e) {
       case 'getInvoices':
         result = getInvoices();
         break;
+      case 'getLatestInvoiceNumber':
+        result = getLatestInvoiceNumber();
+        break;
+      case 'getConfig':
+        result = getConfig();
+        break;
       // Write operations via GET for CORS compatibility
       case 'saveInvoice':
         const invoiceData = JSON.parse(e.parameter.data);
@@ -77,8 +83,12 @@ function doGet(e) {
         const inquiryData = JSON.parse(e.parameter.data);
         result = saveBookingInquiry(inquiryData);
         break;
+      case 'saveConfig':
+        const configData = JSON.parse(e.parameter.data);
+        result = saveConfig(configData);
+        break;
       default:
-        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry'] };
+        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig'] };
     }
 
     return ContentService
@@ -420,6 +430,68 @@ function getInvoices() {
 }
 
 /**
+ * Get the latest invoice/quotation numbers
+ * Returns the next available numbers for both QUO and INV
+ */
+function getLatestInvoiceNumber() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEETS.INVOICES);
+  if (!sheet) {
+    const year = new Date().getFullYear();
+    return {
+      success: true,
+      nextQuotation: `QUO-${year}-001`,
+      nextInvoice: `INV-${year}-001`,
+      latestQuoNum: 0,
+      latestInvNum: 0
+    };
+  }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    const year = new Date().getFullYear();
+    return {
+      success: true,
+      nextQuotation: `QUO-${year}-001`,
+      nextInvoice: `INV-${year}-001`,
+      latestQuoNum: 0,
+      latestInvNum: 0
+    };
+  }
+
+  const headers = data[0];
+  const invoiceNumCol = headers.indexOf('Invoice Number');
+  const currentYear = new Date().getFullYear();
+
+  let maxQuoNum = 0;
+  let maxInvNum = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const num = data[i][invoiceNumCol];
+    if (!num) continue;
+
+    const parts = String(num).split('-');
+    if (parts.length === 3) {
+      const prefix = parts[0];
+      const year = parseInt(parts[1]);
+      const seq = parseInt(parts[2]);
+
+      if (year === currentYear) {
+        if (prefix === 'QUO' && seq > maxQuoNum) maxQuoNum = seq;
+        if (prefix === 'INV' && seq > maxInvNum) maxInvNum = seq;
+      }
+    }
+  }
+
+  return {
+    success: true,
+    nextQuotation: `QUO-${currentYear}-${String(maxQuoNum + 1).padStart(3, '0')}`,
+    nextInvoice: `INV-${currentYear}-${String(maxInvNum + 1).padStart(3, '0')}`,
+    latestQuoNum: maxQuoNum,
+    latestInvNum: maxInvNum
+  };
+}
+
+/**
  * Update invoice status
  */
 function updateInvoiceStatus(invoiceNumber, status) {
@@ -628,6 +700,114 @@ function getOrCreateSheet(sheetName, headers) {
   }
 
   return sheet;
+}
+
+// =============================================================================
+// CONFIG MANAGEMENT
+// =============================================================================
+
+/**
+ * Get all configuration from the Config sheet
+ * Config is stored as key-value pairs
+ */
+function getConfig() {
+  const sheet = getOrCreateSheet(SHEETS.CONFIG, ['Key', 'Value', 'Type', 'Description']);
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length <= 1) {
+    // Initialize with default config
+    initializeDefaultConfig(sheet);
+    return getConfig(); // Recursively get after initialization
+  }
+
+  const config = {};
+  for (let i = 1; i < data.length; i++) {
+    const key = data[i][0];
+    const value = data[i][1];
+    const type = data[i][2];
+
+    // Parse value based on type
+    if (type === 'json') {
+      try {
+        config[key] = JSON.parse(value);
+      } catch (e) {
+        config[key] = value;
+      }
+    } else if (type === 'number') {
+      config[key] = Number(value);
+    } else if (type === 'boolean') {
+      config[key] = value === 'true' || value === true;
+    } else {
+      config[key] = value;
+    }
+  }
+
+  return { success: true, config };
+}
+
+/**
+ * Save configuration to the Config sheet
+ */
+function saveConfig(newConfig) {
+  const sheet = getOrCreateSheet(SHEETS.CONFIG, ['Key', 'Value', 'Type', 'Description']);
+  const data = sheet.getDataRange().getValues();
+
+  // Build a map of existing keys to row indices
+  const keyToRow = {};
+  for (let i = 1; i < data.length; i++) {
+    keyToRow[data[i][0]] = i + 1; // 1-indexed
+  }
+
+  // Update each config value
+  for (const [key, value] of Object.entries(newConfig)) {
+    const type = typeof value === 'object' ? 'json' : typeof value;
+    const stringValue = type === 'json' ? JSON.stringify(value) : String(value);
+
+    if (keyToRow[key]) {
+      // Update existing
+      sheet.getRange(keyToRow[key], 2).setValue(stringValue);
+      sheet.getRange(keyToRow[key], 3).setValue(type);
+    } else {
+      // Append new
+      sheet.appendRow([key, stringValue, type, '']);
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Initialize default configuration values
+ */
+function initializeDefaultConfig(sheet) {
+  const defaults = [
+    ['business_name', 'WZHarith Studio', 'string', 'Business name'],
+    ['business_tagline', 'Live Saxophone Performance Services', 'string', 'Business tagline'],
+    ['business_ssm', '', 'string', 'SSM registration number'],
+    ['contact_phone', '', 'string', 'Phone number'],
+    ['contact_email', '', 'string', 'Email address'],
+    ['contact_whatsapp', '', 'string', 'WhatsApp number (without +)'],
+    ['social_instagram', '', 'string', 'Instagram username'],
+    ['social_tiktok', '', 'string', 'TikTok username'],
+    ['social_youtube', '', 'string', 'YouTube username'],
+    ['social_facebook', '', 'string', 'Facebook page'],
+    ['banking_bank', '', 'string', 'Bank name'],
+    ['banking_accountName', '', 'string', 'Account holder name'],
+    ['banking_accountNumber', '', 'string', 'Account number'],
+    ['packages', '[]', 'json', 'List of packages'],
+    ['addons', '[]', 'json', 'List of add-ons'],
+    ['transport_baseCharge', '0', 'number', 'Base transport charge'],
+    ['transport_perKmRate', '0', 'number', 'Per km rate'],
+    ['transport_freeZone', '', 'string', 'Free transport zone'],
+    ['terms_depositPercent', '30', 'number', 'Deposit percentage'],
+    ['terms_balanceDueDays', '3', 'number', 'Days before event for balance'],
+    ['terms_cancellationPolicy', '', 'string', 'Cancellation policy text'],
+    ['terms_latePayment', '', 'string', 'Late payment terms'],
+  ];
+
+  for (const row of defaults) {
+    sheet.appendRow(row);
+  }
 }
 
 /**
