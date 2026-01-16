@@ -428,6 +428,38 @@ function parseTimePeriod(timeStr) {
 }
 
 /**
+ * Format a Date object to "H:MM AM/PM" string
+ * Google Sheets stores time-only values as Date objects with epoch 1899-12-30
+ */
+function formatTimeFromDate(value) {
+  if (!value) return '';
+
+  // If already a string in proper format, return as-is
+  if (typeof value === 'string') {
+    // Check if it's already formatted like "12:00 PM"
+    if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(value)) {
+      return value;
+    }
+    // If it's an ISO string like "1899-12-30T12:04:35.000Z", parse it
+    if (value.includes('T') && value.includes('Z')) {
+      // Parse as Date and format in local timezone
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) {
+        return Utilities.formatDate(date, Session.getScriptTimeZone(), 'h:mm a');
+      }
+    }
+    return value;
+  }
+
+  // If it's a Date object, format it
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'h:mm a');
+  }
+
+  return String(value);
+}
+
+/**
  * Get all invoices from sheet
  */
 function getInvoices() {
@@ -444,7 +476,15 @@ function getInvoices() {
     const row = data[i];
     const invoice = {};
     headers.forEach((header, j) => {
-      invoice[toCamelCase(header)] = row[j];
+      const key = toCamelCase(header);
+      let value = row[j];
+
+      // Format time fields properly (Event Time column)
+      if (key === 'eventTime' && value) {
+        value = formatTimeFromDate(value);
+      }
+
+      invoice[key] = value;
     });
 
     // Parse items JSON
