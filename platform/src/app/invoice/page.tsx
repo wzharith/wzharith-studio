@@ -65,6 +65,7 @@ interface StoredInvoice {
   status: 'draft' | 'sent' | 'paid' | 'cancelled';
   linkedQuotationNumber?: string; // Original quotation number when converted to invoice
   convertedAt?: string; // When quotation was converted to invoice
+  deletedAt?: string; // Soft delete timestamp
 }
 
 export default function InvoiceGenerator() {
@@ -78,6 +79,9 @@ export default function InvoiceGenerator() {
   // History panel
   const [showHistory, setShowHistory] = useState(false);
   const [savedInvoices, setSavedInvoices] = useState<StoredInvoice[]>([]);
+
+  // Filter out soft-deleted invoices for display
+  const visibleInvoices = savedInvoices.filter(inv => !inv.deletedAt);
 
   // Track currently loaded invoice for updates
   const [currentLoadedId, setCurrentLoadedId] = useState<string | null>(null);
@@ -432,10 +436,29 @@ export default function InvoiceGenerator() {
 
   // Delete invoice from history
   const deleteInvoice = (id: string) => {
-    if (confirm('Delete this record?')) {
-      const updated = savedInvoices.filter(inv => inv.id !== id);
+    if (confirm('Delete this record? (It will be hidden but can be recovered from Google Sheets)')) {
+      // Soft delete: mark as deleted instead of removing
+      const updated = savedInvoices.map(inv =>
+        inv.id === id ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const } : inv
+      );
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedInvoices(updated);
+
+      // Sync deletion to Google Sheets
+      const deletedInvoice = updated.find(inv => inv.id === id);
+      if (deletedInvoice && isGoogleSyncEnabled()) {
+        setSyncStatus('syncing');
+        saveInvoiceToGoogle(deletedInvoice as GoogleStoredInvoice)
+          .then((result) => {
+            if (result.success) {
+              setSyncStatus('synced');
+              setLastSyncTime(new Date());
+            } else {
+              setSyncStatus('error');
+            }
+          })
+          .catch(() => setSyncStatus('error'));
+      }
     }
   };
 
@@ -756,7 +779,7 @@ export default function InvoiceGenerator() {
                 className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
               >
                 <History className="w-4 h-4" />
-                History ({savedInvoices.length})
+                History ({visibleInvoices.length})
               </button>
               <button
                 onClick={handleSyncToGoogle}
@@ -918,7 +941,7 @@ export default function InvoiceGenerator() {
               className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
             >
               <History className="w-3 h-3" />
-              {savedInvoices.length}
+              {visibleInvoices.length}
             </button>
             {isGoogleSyncEnabled() && (
               <button
@@ -1578,18 +1601,18 @@ export default function InvoiceGenerator() {
             {/* Stats Summary */}
             <div className="bg-slate-50 px-6 py-4 border-b grid grid-cols-3 gap-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-slate-800">{savedInvoices.length}</div>
+                <div className="text-2xl font-bold text-slate-800">{visibleInvoices.length}</div>
                 <div className="text-xs text-slate-500">Total</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-emerald-600">
-                  {savedInvoices.filter(i => i.status === 'paid').length}
+                  {visibleInvoices.filter(i => i.status === 'paid').length}
                 </div>
                 <div className="text-xs text-slate-500">Paid</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-amber-600">
-                  RM {savedInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
+                  RM {visibleInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
                 </div>
                 <div className="text-xs text-slate-500">Total Value</div>
               </div>
@@ -1605,7 +1628,7 @@ export default function InvoiceGenerator() {
                 </div>
               ) : (
                 <div className="divide-y">
-                  {savedInvoices.map((invoice) => (
+                  {visibleInvoices.map((invoice) => (
                     <div key={invoice.id} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between mb-2">
                         <div>

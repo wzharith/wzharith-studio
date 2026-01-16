@@ -160,6 +160,7 @@ function saveInvoice(invoice) {
     'Created At',
     'Updated At',
     'Linked Quotation',
+    'Deleted At',
   ]);
 
   const data = sheet.getDataRange().getValues();
@@ -198,6 +199,7 @@ function saveInvoice(invoice) {
     invoice.createdAt || new Date().toISOString(),
     new Date().toISOString(),
     invoice.linkedQuotationNumber || '',
+    invoice.deletedAt || '',
   ];
 
   if (rowIndex > 0) {

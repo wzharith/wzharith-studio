@@ -34,6 +34,7 @@ export interface StoredInvoice {
   status: 'draft' | 'sent' | 'paid' | 'cancelled';
   linkedQuotationNumber?: string;
   convertedAt?: string;
+  deletedAt?: string; // Soft delete timestamp
 }
 
 export interface InvoiceItem {
@@ -167,6 +168,7 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
         linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
         convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
+        deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
       }));
 
       return { success: true, invoices };
