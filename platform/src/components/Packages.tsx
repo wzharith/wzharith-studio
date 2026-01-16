@@ -3,7 +3,7 @@
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Check, Sparkles, Clock, Music } from 'lucide-react';
-import { packages, addOns } from '@/data/packages';
+import { siteConfig } from '@/config/site.config';
 
 export default function Packages() {
   const ref = useRef(null);
@@ -35,7 +35,7 @@ export default function Packages() {
 
         {/* Packages Grid */}
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-          {packages.map((pkg, i) => (
+          {siteConfig.packages.map((pkg, i) => (
             <motion.div
               key={pkg.id}
               initial={{ opacity: 0, y: 30 }}
@@ -58,7 +58,7 @@ export default function Packages() {
                 </h3>
                 <div className="mb-2">
                   <span className="font-display text-3xl font-bold gold-text">
-                    {pkg.price}
+                    {pkg.priceDisplay}
                   </span>
                   {pkg.priceNote && (
                     <span className="text-midnight-500 text-sm ml-1">
@@ -72,16 +72,22 @@ export default function Packages() {
               </div>
 
               {/* Stats */}
-              <div className="flex justify-center gap-4 mb-6 pb-6 border-b border-midnight-700">
-                <div className="text-center">
-                  <Music className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                  <span className="text-xs text-midnight-400">{pkg.songs}</span>
+              {(pkg.songs || pkg.duration) && (
+                <div className="flex justify-center gap-4 mb-6 pb-6 border-b border-midnight-700">
+                  {pkg.songs && (
+                    <div className="text-center">
+                      <Music className="w-4 h-4 text-gold-400 mx-auto mb-1" />
+                      <span className="text-xs text-midnight-400">{pkg.songs}</span>
+                    </div>
+                  )}
+                  {pkg.duration && (
+                    <div className="text-center">
+                      <Clock className="w-4 h-4 text-gold-400 mx-auto mb-1" />
+                      <span className="text-xs text-midnight-400">{pkg.duration}</span>
+                    </div>
+                  )}
                 </div>
-                <div className="text-center">
-                  <Clock className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                  <span className="text-xs text-midnight-400">{pkg.duration}</span>
-                </div>
-              </div>
+              )}
 
               {/* Features */}
               <ul className="space-y-3 mb-6">
@@ -111,31 +117,38 @@ export default function Packages() {
         </div>
 
         {/* Add-ons */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={isInView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.5 }}
-          className="glass rounded-2xl p-8 max-w-3xl mx-auto"
-        >
-          <h3 className="font-display text-xl font-semibold text-white text-center mb-6">
-            Add-On Services
-          </h3>
-          <div className="grid sm:grid-cols-2 gap-4">
-            {addOns.map((addon, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between py-2 border-b border-midnight-700 last:border-0"
-              >
-                <span className="font-sans text-sm text-midnight-300">
-                  {addon.name}
-                </span>
-                <span className="font-sans text-sm font-medium text-gold-400">
-                  {addon.price}
-                </span>
-              </div>
-            ))}
-          </div>
-        </motion.div>
+        {siteConfig.addons.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={isInView ? { opacity: 1, y: 0 } : {}}
+            transition={{ delay: 0.5 }}
+            className="glass rounded-2xl p-8 max-w-3xl mx-auto"
+          >
+            <h3 className="font-display text-xl font-semibold text-white text-center mb-6">
+              Add-On Services
+            </h3>
+            <div className="grid sm:grid-cols-2 gap-4">
+              {siteConfig.addons.map((addon, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between py-2 border-b border-midnight-700 last:border-0"
+                >
+                  <div>
+                    <span className="font-sans text-sm text-midnight-300">
+                      {addon.name}
+                    </span>
+                    {addon.description && (
+                      <p className="text-xs text-midnight-500">{addon.description}</p>
+                    )}
+                  </div>
+                  <span className="font-sans text-sm font-medium text-gold-400">
+                    {addon.priceDisplay}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         {/* Note */}
         <p className="text-center font-sans text-xs text-midnight-500 mt-8">

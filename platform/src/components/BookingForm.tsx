@@ -3,8 +3,8 @@
 import { useState, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { useForm } from 'react-hook-form';
-import { Calendar, Clock, MapPin, Music, Send, CheckCircle, MessageCircle } from 'lucide-react';
-import { packages } from '@/data/packages';
+import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle } from 'lucide-react';
+import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 
 interface BookingFormData {
   name: string;
@@ -34,7 +34,7 @@ export default function BookingForm() {
 
   const onSubmit = (data: BookingFormData) => {
     // Format WhatsApp message
-    const pkg = packages.find((p) => p.id === data.packageId);
+    const pkg = siteConfig.packages.find((p) => p.id === data.packageId);
     const message = `
 *New Booking Inquiry*
 
@@ -55,8 +55,7 @@ ${data.message || 'None'}
     `.trim();
 
     // Open WhatsApp with pre-filled message
-    const whatsappUrl = `https://wa.me/60174047441?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank');
+    window.open(getWhatsAppUrl(message), '_blank');
     setIsSubmitted(true);
   };
 
@@ -230,9 +229,9 @@ ${data.message || 'None'}
                     className="w-full px-4 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
                   >
                     <option value="">Select a package</option>
-                    {packages.map((pkg) => (
+                    {siteConfig.packages.map((pkg) => (
                       <option key={pkg.id} value={pkg.id}>
-                        {pkg.name} - {pkg.price}
+                        {pkg.name} - {pkg.priceDisplay}
                       </option>
                     ))}
                   </select>
@@ -301,7 +300,7 @@ ${data.message || 'None'}
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <a
-              href="https://wa.me/60174047441"
+              href={getWhatsAppUrl()}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
@@ -309,22 +308,26 @@ ${data.message || 'None'}
               <MessageCircle className="w-4 h-4" />
               WhatsApp
             </a>
-            <a
-              href="https://instagram.com/wzharith"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
-            >
-              IG: @wzharith
-            </a>
-            <a
-              href="https://tiktok.com/@wzharithh"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
-            >
-              TikTok: @wzharithh
-            </a>
+            {siteConfig.social.instagram && (
+              <a
+                href={getSocialUrl('instagram')}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
+              >
+                IG: @{siteConfig.social.instagram}
+              </a>
+            )}
+            {siteConfig.social.tiktok && (
+              <a
+                href={getSocialUrl('tiktok')}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
+              >
+                TikTok: @{siteConfig.social.tiktok}
+              </a>
+            )}
           </div>
         </motion.div>
       </div>

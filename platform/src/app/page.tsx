@@ -8,6 +8,7 @@ import Collaborators from '@/components/Collaborators';
 import DigitalProducts from '@/components/DigitalProducts';
 import BookingForm from '@/components/BookingForm';
 import Footer from '@/components/Footer';
+import { siteConfig } from '@/config/site.config';
 
 export default function Home() {
   return (
@@ -15,11 +16,11 @@ export default function Home() {
       <Navigation />
       <Hero />
       <About />
-      <SongCatalog />
+      {siteConfig.features.showSongCatalog && <SongCatalog />}
       <Packages />
-      <Portfolio />
-      <Collaborators />
-      <DigitalProducts />
+      {siteConfig.features.showPortfolio && <Portfolio />}
+      {siteConfig.features.showCollaborators && <Collaborators />}
+      {siteConfig.features.showDigitalProducts && <DigitalProducts />}
       <BookingForm />
       <Footer />
     </main>

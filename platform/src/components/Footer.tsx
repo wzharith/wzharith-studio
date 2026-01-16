@@ -1,6 +1,7 @@
 'use client';
 
 import { Music, Instagram, MessageCircle, Mail, Heart, Youtube } from 'lucide-react';
+import { siteConfig, getWhatsAppUrl, getSocialUrl, getPhoneDisplay, getSsmShort } from '@/config/site.config';
 
 const quickLinks = [
   { href: '#about', label: 'About' },
@@ -10,14 +11,31 @@ const quickLinks = [
   { href: '#booking', label: 'Book Now' },
 ];
 
-const socialLinks = [
-  { icon: Instagram, href: 'https://instagram.com/wzharith', label: 'Instagram' },
-  { icon: MessageCircle, href: 'https://wa.me/60174047441', label: 'WhatsApp' },
-  { icon: Mail, href: 'mailto:wzharith.studio@gmail.com', label: 'Email' },
-  { icon: Youtube, href: 'https://youtube.com/@wzharith', label: 'YouTube' },
-];
-
 export default function Footer() {
+  // Build social links from config
+  const socialLinks = [
+    siteConfig.social.instagram && {
+      icon: Instagram,
+      href: getSocialUrl('instagram'),
+      label: 'Instagram',
+    },
+    {
+      icon: MessageCircle,
+      href: getWhatsAppUrl(),
+      label: 'WhatsApp',
+    },
+    {
+      icon: Mail,
+      href: `mailto:${siteConfig.contact.email}`,
+      label: 'Email',
+    },
+    siteConfig.social.youtube && {
+      icon: Youtube,
+      href: getSocialUrl('youtube'),
+      label: 'YouTube',
+    },
+  ].filter(Boolean) as { icon: typeof Instagram; href: string; label: string }[];
+
   return (
     <footer className="py-16 px-6 border-t border-midnight-800">
       <div className="max-w-7xl mx-auto">
@@ -29,16 +47,17 @@ export default function Footer() {
                 <Music className="w-5 h-5 text-midnight-950" />
               </div>
               <span className="font-display text-xl font-semibold gold-text">
-                WZHarith Studio
+                {siteConfig.business.name}
               </span>
             </a>
             <p className="font-body text-midnight-400 max-w-sm mb-6">
-              Professional live saxophone performance for weddings and events
-              in Malaysia. Creating magical musical moments since 2024.
+              {siteConfig.business.description}
             </p>
-            <p className="font-sans text-xs text-midnight-500 mb-4">
-              SSM: 202603015121 (KT0606402-U)
-            </p>
+            {siteConfig.business.ssm && (
+              <p className="font-sans text-xs text-midnight-500 mb-4">
+                SSM: {siteConfig.business.ssm}
+              </p>
+            )}
             <div className="flex gap-3">
               {socialLinks.map((link) => (
                 <a
@@ -77,32 +96,36 @@ export default function Footer() {
             <h4 className="font-sans font-semibold text-white mb-4">Get In Touch</h4>
             <div className="space-y-3">
               <a
-                href="https://wa.me/60174047441"
+                href={getWhatsAppUrl()}
                 className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
               >
                 <MessageCircle className="w-4 h-4" />
-                +60 17-404 7441
+                {getPhoneDisplay()}
               </a>
               <a
-                href="mailto:wzharith.studio@gmail.com"
+                href={`mailto:${siteConfig.contact.email}`}
                 className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
               >
                 <Mail className="w-4 h-4" />
-                wzharith.studio@gmail.com
+                {siteConfig.contact.email}
               </a>
-              <a
-                href="https://instagram.com/wzharith"
-                className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
-              >
-                <Instagram className="w-4 h-4" />
-                @wzharith
-              </a>
-              <a
-                href="https://tiktok.com/@wzharithh"
-                className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
-              >
-                🎵 TikTok: @wzharithh
-              </a>
+              {siteConfig.social.instagram && (
+                <a
+                  href={getSocialUrl('instagram')}
+                  className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
+                >
+                  <Instagram className="w-4 h-4" />
+                  @{siteConfig.social.instagram}
+                </a>
+              )}
+              {siteConfig.social.tiktok && (
+                <a
+                  href={getSocialUrl('tiktok')}
+                  className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
+                >
+                  🎵 TikTok: @{siteConfig.social.tiktok}
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -110,7 +133,8 @@ export default function Footer() {
         {/* Bottom */}
         <div className="pt-8 border-t border-midnight-800 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-sans text-xs text-midnight-500">
-            © {new Date().getFullYear()} WZHarith Studio (SSM: KT0606402-U). All rights reserved.
+            © {new Date().getFullYear()} {siteConfig.business.name}
+            {getSsmShort() && ` (SSM: ${getSsmShort()})`}. All rights reserved.
           </p>
           <p className="font-sans text-xs text-midnight-500 flex items-center gap-1">
             Made with <Heart className="w-3 h-3 text-gold-500" /> in Malaysia

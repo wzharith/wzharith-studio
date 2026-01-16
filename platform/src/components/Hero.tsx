@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { ChevronDown, Play, Sparkles } from 'lucide-react';
+import { siteConfig } from '@/config/site.config';
 
 export default function Hero() {
   return (
@@ -36,7 +37,7 @@ export default function Hero() {
           className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass text-gold-400 text-sm mb-8"
         >
           <Sparkles className="w-4 h-4" />
-          <span>30+ Weddings Performed</span>
+          <span>{siteConfig.stats.eventsCount} Weddings Performed</span>
         </motion.div>
 
         {/* Main Heading */}
@@ -58,8 +59,7 @@ export default function Hero() {
           transition={{ delay: 0.6 }}
           className="font-body text-xl md:text-2xl text-midnight-300 mb-12 max-w-2xl mx-auto leading-relaxed"
         >
-          Professional live saxophone performance for weddings and events.
-          Let the soulful melodies of the saxophone create magical moments
+          {siteConfig.business.tagline}. Let the soulful melodies create magical moments
           on your special day.
         </motion.p>
 
@@ -76,13 +76,15 @@ export default function Hero() {
           >
             Book Your Date
           </a>
-          <a
-            href="#songs"
-            className="px-8 py-4 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all flex items-center gap-2"
-          >
-            <Play className="w-4 h-4" />
-            View Repertoire
-          </a>
+          {siteConfig.features.showSongCatalog && (
+            <a
+              href="#songs"
+              className="px-8 py-4 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all flex items-center gap-2"
+            >
+              <Play className="w-4 h-4" />
+              View Repertoire
+            </a>
+          )}
         </motion.div>
 
         {/* Stats */}
@@ -93,9 +95,9 @@ export default function Hero() {
           className="mt-20 grid grid-cols-3 gap-8 max-w-lg mx-auto"
         >
           {[
-            { value: '30+', label: 'Weddings' },
-            { value: '46', label: 'Songs' },
-            { value: '2', label: 'Years' },
+            { value: siteConfig.stats.eventsCount, label: 'Weddings' },
+            { value: siteConfig.stats.songsCount, label: 'Songs' },
+            { value: siteConfig.stats.yearsExperience, label: 'Years' },
           ].map((stat, i) => (
             <div key={i} className="text-center">
               <div className="font-display text-3xl md:text-4xl font-bold gold-text">

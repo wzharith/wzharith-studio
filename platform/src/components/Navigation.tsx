@@ -3,13 +3,14 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Menu, X, Music } from 'lucide-react';
+import { siteConfig } from '@/config/site.config';
 
 const navLinks = [
   { href: '#home', label: 'Home' },
   { href: '#about', label: 'About' },
-  { href: '#songs', label: 'Repertoire' },
+  { href: '#songs', label: 'Repertoire', showIf: 'showSongCatalog' },
   { href: '#packages', label: 'Packages' },
-  { href: '#portfolio', label: 'Portfolio' },
+  { href: '#portfolio', label: 'Portfolio', showIf: 'showPortfolio' },
   { href: '#booking', label: 'Book Now' },
 ];
 
@@ -24,6 +25,12 @@ export default function Navigation() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Filter nav links based on feature toggles
+  const visibleLinks = navLinks.filter((link) => {
+    if (!link.showIf) return true;
+    return siteConfig.features[link.showIf as keyof typeof siteConfig.features];
+  });
 
   return (
     <motion.nav
@@ -40,13 +47,13 @@ export default function Navigation() {
             <Music className="w-5 h-5 text-midnight-950" />
           </div>
           <span className="font-display text-xl font-semibold gold-text">
-            WZHarith Studio
+            {siteConfig.business.name}
           </span>
         </a>
 
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center gap-8">
-          {navLinks.map((link) => (
+          {visibleLinks.map((link) => (
             <a
               key={link.href}
               href={link.href}
@@ -73,7 +80,7 @@ export default function Navigation() {
         className="md:hidden overflow-hidden glass"
       >
         <div className="px-6 py-4 flex flex-col gap-4">
-          {navLinks.map((link) => (
+          {visibleLinks.map((link) => (
             <a
               key={link.href}
               href={link.href}

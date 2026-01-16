@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
+import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 
 // Password from environment variable (set in GitHub Secrets)
 // Falls back to default if not set
@@ -157,18 +158,18 @@ export default function InvoiceGenerator() {
     );
   };
 
-  // Calculate balance due date (3 days before event)
+  // Calculate balance due date (X days before event from config)
   const getBalanceDueDate = () => {
     if (!eventDate) return null;
     const event = new Date(eventDate);
-    event.setDate(event.getDate() - 3);
+    event.setDate(event.getDate() - siteConfig.terms.balanceDueDays);
     return event;
   };
 
   const balanceDueDate = getBalanceDueDate();
   const formattedBalanceDueDate = balanceDueDate
     ? balanceDueDate.toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
-    : '3 days before event';
+    : `${siteConfig.terms.balanceDueDays} days before event`;
 
   // Generate filename for PDF (uses only - as separator)
   const generateFilename = () => {
@@ -183,7 +184,7 @@ export default function InvoiceGenerator() {
       document.title = generateFilename();
     }
     return () => {
-      document.title = 'WZHarith Studio';
+      document.title = siteConfig.business.name;
     };
   }, [clientName, eventDate, invoiceNumber, documentType, isAuthenticated]);
 
@@ -260,8 +261,8 @@ export default function InvoiceGenerator() {
     setDocumentType('invoice');
     setInvoiceDate(new Date().toISOString().split('T')[0]);
 
-    // Auto-set 30% deposit as paid (client confirmed)
-    setDepositPaid(Math.round(totalAfterDiscount * 0.3));
+    // Auto-set deposit as paid (client confirmed)
+    setDepositPaid(Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)));
   };
 
   // Start new document (clear form)
@@ -335,29 +336,27 @@ export default function InvoiceGenerator() {
     setSavedInvoices(updated);
   };
 
-  // Package presets (main packages)
-  const packagePresets = [
-    { name: 'Entrance Only', price: 400, details: '1-2 songs during entrance', setDeposit: true },
-    { name: 'Entrance + Cake Cutting', price: 600, details: '3-4 songs, entrance + cake cutting', setDeposit: true },
-    { name: 'Full Package', price: 1000, details: '8-10 songs, entrance + cake + meal', setDeposit: true },
-    { name: 'Premium Experience', price: 1800, details: 'Unlimited songs, 2+ hours, duo option', setDeposit: true },
-  ];
+  // Package presets (from config)
+  const packagePresets = siteConfig.packages.map(pkg => ({
+    name: pkg.name,
+    price: pkg.price,
+    details: pkg.description,
+    setDeposit: true,
+  }));
 
-  // Add-on presets (these ADD to existing items)
-  const addOnPresets = [
-    { name: 'Custom Song', price: 100, details: 'Learning a new song request' },
-    { name: 'Additional Song', price: 50, details: 'Extra song beyond package' },
-    { name: 'Second Location', price: 300, details: 'Same day, different venue' },
-    { name: 'Extended Performance', price: 200, details: 'Additional 30 minutes' },
-  ];
+  // Add-on presets (from config)
+  const addOnPresets = siteConfig.addons.map(addon => ({
+    name: addon.name,
+    price: addon.price,
+    details: addon.description,
+  }));
 
-  // Transport presets
-  const transportPresets = [
-    { name: 'Transport (Klang Valley)', price: 50, details: 'Outside Cyberjaya, within KL/Selangor' },
-    { name: 'Transport (Selangor Border)', price: 100, details: 'Rawang, Klang, Kajang, etc.' },
-    { name: 'Transport (Other States)', price: 0, details: 'Price varies - to be quoted' },
-    { name: 'Toll Charges', price: 0, details: 'Actual toll cost (to be filled)' },
-  ];
+  // Transport presets (from config)
+  const transportPresets = siteConfig.transport.zones.map(zone => ({
+    name: `Transport (${zone.name})`,
+    price: zone.price,
+    details: zone.description,
+  }));
 
   // Apply main package (replaces items)
   const applyPackage = (preset: typeof packagePresets[0]) => {
@@ -371,7 +370,7 @@ export default function InvoiceGenerator() {
       },
     ]);
     if (preset.setDeposit) {
-      setDepositPaid(Math.round(preset.price * 0.3)); // 30% deposit
+      setDepositPaid(Math.round(preset.price * (siteConfig.terms.depositPercent / 100)));
     }
   };
 
@@ -825,7 +824,7 @@ export default function InvoiceGenerator() {
                       onChange={(e) => setDepositPaid(Number(e.target.value))}
                       className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                     />
-                    <p className="text-xs text-slate-400 mt-1">30% of total = RM {(totalAfterDiscount * 0.3).toFixed(2)}</p>
+                    <p className="text-xs text-slate-400 mt-1">{siteConfig.terms.depositPercent}% of total = RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}</p>
                   </div>
                 )}
               </div>
@@ -841,9 +840,9 @@ export default function InvoiceGenerator() {
               {/* Header */}
               <div className="print-section flex flex-col sm:flex-row sm:justify-between sm:items-start border-b-4 border-amber-500 pb-4 sm:pb-6 mb-4 sm:mb-8 gap-4">
                 <div className="text-center sm:text-left">
-                  <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-1">🎷 WZHarith Studio</h1>
-                  <p className="text-slate-500 text-sm">Live Saxophone Performance Services</p>
-                  <p className="text-slate-400 text-xs mt-1">SSM: 202603015121 (KT0606402-U)</p>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-1">🎷 {siteConfig.business.name}</h1>
+                  <p className="text-slate-500 text-sm">{siteConfig.business.tagline}</p>
+                  {siteConfig.business.ssm && <p className="text-slate-400 text-xs mt-1">SSM: {siteConfig.business.ssm}</p>}
                 </div>
                 <div className="text-center sm:text-right">
                   <h2 className="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">
@@ -996,8 +995,8 @@ export default function InvoiceGenerator() {
                         <span>RM {totalAfterDiscount.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between py-2 text-sm text-slate-500">
-                        <span>Deposit Required (30%)</span>
-                        <span>RM {(totalAfterDiscount * 0.3).toFixed(2)}</span>
+                        <span>Deposit Required ({siteConfig.terms.depositPercent}%)</span>
+                        <span>RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}</span>
                       </div>
                     </>
                   )}
@@ -1009,10 +1008,10 @@ export default function InvoiceGenerator() {
                 <div className="bg-slate-50 rounded-lg p-4 sm:p-6 mb-4 sm:mb-6 border border-slate-200 print:bg-gray-50 print:border-gray-300">
                   <h3 className="text-xs uppercase tracking-wider text-amber-600 font-semibold mb-2 sm:mb-3">Payment Details</h3>
                   <div className="grid grid-cols-2 gap-2 sm:gap-3 text-xs sm:text-sm">
-                    <p><strong>Bank:</strong> Maybank</p>
-                    <p><strong>Account Name:</strong> WZHARITH STUDIO</p>
-                    <p><strong>Account No:</strong> 5686 0312 0447</p>
-                    <p><strong>Reference:</strong> {eventDate ? eventDate.replace(/-/g, '') : 'WZHARITH'}-{(clientName || 'CLIENT').split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
+                    <p><strong>Bank:</strong> {siteConfig.banking.bank}</p>
+                    <p><strong>Account Name:</strong> {siteConfig.banking.accountName}</p>
+                    <p><strong>Account No:</strong> {siteConfig.banking.accountNumber}</p>
+                    <p><strong>Reference:</strong> {eventDate ? eventDate.replace(/-/g, '') : 'BOOKING'}-{(clientName || 'CLIENT').split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
                   </div>
                 </div>
 
@@ -1021,20 +1020,20 @@ export default function InvoiceGenerator() {
                   <h4 className="font-semibold text-slate-700 mb-2">Terms & Conditions</h4>
                 {documentType === 'quotation' ? (
                   <ul className="list-disc list-inside space-y-0.5">
-                    <li>This quotation is valid for <strong>7 days</strong> from the date above</li>
-                    <li><strong>Payment:</strong> Cash or bank transfer only (immediate payment)</li>
-                    <li><strong>30% deposit</strong> required to confirm your booking</li>
-                    <li>Balance due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong>. Late payment may result in cancellation.</li>
-                    <li>Transport charges apply for venues outside Cyberjaya</li>
+                    <li>This quotation is valid for <strong>{siteConfig.terms.quotationValidDays} days</strong> from the date above</li>
+                    <li><strong>Payment:</strong> {siteConfig.terms.paymentMethods}</li>
+                    <li><strong>{siteConfig.terms.depositPercent}% deposit</strong> required to confirm your booking</li>
+                    <li>Balance due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong>. {siteConfig.terms.latePaymentPolicy}</li>
+                    <li>Transport charges apply for venues outside {siteConfig.transport.baseLocation}</li>
                   </ul>
                 ) : (
                   <ul className="list-disc list-inside space-y-0.5">
-                    <li><strong>Payment:</strong> Cash or bank transfer only (immediate payment)</li>
-                    <li><strong>Deposit:</strong> 30% deposit required to confirm booking</li>
+                    <li><strong>Payment:</strong> {siteConfig.terms.paymentMethods}</li>
+                    <li><strong>Deposit:</strong> {siteConfig.terms.depositPercent}% deposit required to confirm booking</li>
                     <li><strong>Balance:</strong> Full payment due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong></li>
-                    <li><strong>Late Payment:</strong> Failure to pay by due date may result in booking cancellation</li>
-                    <li><strong>Cancellation:</strong> Deposit is non-refundable</li>
-                    <li><strong>Rescheduling:</strong> Free reschedule subject to availability</li>
+                    <li><strong>Late Payment:</strong> {siteConfig.terms.latePaymentPolicy}</li>
+                    <li><strong>Cancellation:</strong> {siteConfig.terms.cancellationPolicy}</li>
+                    <li><strong>Rescheduling:</strong> {siteConfig.terms.reschedulingPolicy}</li>
                   </ul>
                 )}
                 </div>
@@ -1042,8 +1041,8 @@ export default function InvoiceGenerator() {
 
               {/* Footer */}
               <div className="print-section text-center text-xs text-slate-500 pt-3 sm:pt-4 border-t border-slate-200">
-                <p className="font-semibold text-slate-700">WZHarith Studio</p>
-                <p>📞 +60 17-404 7441 | ✉️ wzharith.studio@gmail.com | 📸 @wzharith</p>
+                <p className="font-semibold text-slate-700">{siteConfig.business.name}</p>
+                <p>📞 {getPhoneDisplay()} | ✉️ {siteConfig.contact.email}{siteConfig.social.instagram ? ` | 📸 @${siteConfig.social.instagram}` : ''}</p>
                 <p className="mt-1 sm:mt-2 text-amber-600">Thank you for your business! 🎷</p>
               </div>
             </div>
