@@ -66,6 +66,12 @@ export interface AvailabilityData {
   bookedDates: string[];
 }
 
+export interface CalendarEventInfo {
+  date: string;
+  title: string;
+  venue: string;
+}
+
 export interface InquiryFromSheet {
   inquiryId: string;
   dateReceived: string;
@@ -101,6 +107,35 @@ export interface BookingInquiry {
  */
 export const isGoogleSyncEnabled = (): boolean => {
   return !!GOOGLE_SCRIPT_URL && GOOGLE_SCRIPT_URL !== '';
+};
+
+/**
+ * Parse event time string (e.g., "7:00 PM") into hour, minute, period
+ */
+const parseEventTime = (timeStr: string): { hour: string; minute: string; period: string } => {
+  const defaultTime = { hour: '7', minute: '00', period: 'PM' };
+  if (!timeStr) return defaultTime;
+
+  // Match "7:00 PM" or "19:00" or "7:00PM" formats
+  const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (!match) return defaultTime;
+
+  let hour = parseInt(match[1]);
+  const minute = match[2];
+  let period = match[3]?.toUpperCase() || '';
+
+  // If no AM/PM specified, determine from hour
+  if (!period) {
+    if (hour >= 12 && hour < 24) {
+      period = 'PM';
+      if (hour > 12) hour = hour - 12;
+    } else {
+      period = 'AM';
+      if (hour === 0) hour = 12;
+    }
+  }
+
+  return { hour: String(hour), minute, period };
 };
 
 /**
@@ -201,33 +236,40 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
 
       // The Apps Script returns invoices with camelCase keys
       // Map them to ensure all required fields exist
-      const invoices: StoredInvoice[] = (data.invoices || data || []).map((inv: Record<string, unknown>) => ({
-        id: String(inv.id || inv.invoiceNumber || ''),
-        invoiceNumber: String(inv.invoiceNumber || ''),
-        documentType: (inv.documentType === 'invoice' ? 'invoice' : 'quotation') as 'quotation' | 'invoice',
-        clientName: String(inv.clientName || ''),
-        clientPhone: String(inv.clientPhone || ''),
-        clientEmail: String(inv.clientEmail || ''),
-        clientAddress: String(inv.clientAddress || ''),
-        eventType: String(inv.eventType || ''),
-        eventDate: String(inv.eventDate || ''),
-        eventTimeHour: String(inv.eventTimeHour || '12'),
-        eventTimeMinute: String(inv.eventTimeMinute || '00'),
-        eventTimePeriod: String(inv.eventTimePeriod || 'PM'),
-        eventVenue: String(inv.eventVenue || ''),
-        items: Array.isArray(inv.items) ? inv.items : [],
-        discount: Number(inv.discount) || 0,
-        discountType: (inv.discountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent',
-        depositPaid: Number(inv.depositPaid) || 0,
-        total: Number(inv.total) || 0,
-        createdAt: String(inv.createdAt || new Date().toISOString()),
-        status: (['draft', 'sent', 'paid', 'cancelled'].includes(String(inv.status))
-          ? inv.status
-          : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
-        linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
-        convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
-        deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
-      }));
+      const invoices: StoredInvoice[] = (data.invoices || data || []).map((inv: Record<string, unknown>) => {
+        // Parse event time from "7:00 PM" format to separate fields
+        const eventTimeStr = String(inv.eventTime || '');
+        const timeParts = parseEventTime(eventTimeStr);
+
+        return {
+          id: String(inv.id || inv.invoiceNumber || ''),
+          invoiceNumber: String(inv.invoiceNumber || ''),
+          documentType: (inv.documentType === 'invoice' ? 'invoice' : 'quotation') as 'quotation' | 'invoice',
+          clientName: String(inv.clientName || ''),
+          clientPhone: String(inv.clientPhone || ''),
+          clientEmail: String(inv.clientEmail || ''),
+          clientAddress: String(inv.clientAddress || ''),
+          eventType: String(inv.eventType || ''),
+          eventDate: String(inv.eventDate || ''),
+          eventTimeHour: String(inv.eventTimeHour || timeParts.hour || '7'),
+          eventTimeMinute: String(inv.eventTimeMinute || timeParts.minute || '00'),
+          eventTimePeriod: String(inv.eventTimePeriod || timeParts.period || 'PM'),
+          // Note: Sheet column is "Venue" -> "venue" in camelCase
+          eventVenue: String(inv.eventVenue || inv.venue || ''),
+          items: Array.isArray(inv.items) ? inv.items : [],
+          discount: Number(inv.discount) || 0,
+          discountType: (inv.discountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent',
+          depositPaid: Number(inv.depositPaid) || 0,
+          total: Number(inv.total) || 0,
+          createdAt: String(inv.createdAt || new Date().toISOString()),
+          status: (['draft', 'sent', 'paid', 'cancelled'].includes(String(inv.status))
+            ? inv.status
+            : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
+          linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
+          convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
+          deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
+        };
+      });
 
       return { success: true, invoices };
     }
@@ -350,6 +392,34 @@ export const syncAllInvoices = async (invoices: StoredInvoice[]): Promise<{ succ
   } catch (error) {
     console.error('[Sync] Network error:', error);
     return { success: false, error: 'Network error: ' + String(error) };
+  }
+};
+
+/**
+ * Get all calendar events (for dashboard display)
+ * Returns events with title, date, and venue
+ */
+export const getCalendarEvents = async (): Promise<CalendarEventInfo[]> => {
+  if (!isGoogleSyncEnabled()) {
+    return [];
+  }
+
+  try {
+    const url = `${GOOGLE_SCRIPT_URL}?action=getEvents`;
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return Array.isArray(result) ? result : (result.events || []);
+    }
+
+    return [];
+  } catch (error) {
+    console.error('Error getting calendar events:', error);
+    return [];
   }
 };
 

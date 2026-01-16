@@ -27,6 +27,8 @@ import {
   fetchInvoicesFromCloud,
   getAvailability,
   type StoredInvoice,
+  type CalendarEventInfo,
+  getCalendarEvents,
 } from '@/lib/google-sync';
 import { RevenueChart, StatusPieChart, BookingsChart } from '@/components/DashboardCharts';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
@@ -43,9 +45,11 @@ export default function Dashboard() {
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [calendarBookedDates, setCalendarBookedDates] = useState<string[]>([]);
+  const [calendarEvents, setCalendarEventsData] = useState<CalendarEventInfo[]>([]);
 
   // Calendar state
   const [calendarDate, setCalendarDate] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   // Check authentication (shared auth)
   useEffect(() => {
@@ -82,10 +86,11 @@ export default function Dashboard() {
 
     // Try to fetch from cloud
     if (isGoogleSyncEnabled()) {
-      // Fetch invoices and calendar availability in parallel
-      const [invoicesResult, availabilityResult] = await Promise.all([
+      // Fetch invoices, calendar availability, and calendar events in parallel
+      const [invoicesResult, availabilityResult, eventsResult] = await Promise.all([
         fetchInvoicesFromCloud(),
         getAvailability(calendarDate.getMonth() + 1, calendarDate.getFullYear()),
+        getCalendarEvents(),
       ]);
 
       if (invoicesResult.success && invoicesResult.invoices.length > 0) {
@@ -95,6 +100,11 @@ export default function Dashboard() {
       if (availabilityResult && availabilityResult.bookedDates) {
         console.log('[Dashboard] Booked dates from calendar:', availabilityResult.bookedDates);
         setCalendarBookedDates(availabilityResult.bookedDates);
+      }
+
+      if (eventsResult && eventsResult.length > 0) {
+        console.log('[Dashboard] Calendar events:', eventsResult);
+        setCalendarEventsData(eventsResult);
       }
     }
 
@@ -107,12 +117,37 @@ export default function Dashboard() {
     [invoices]
   );
 
-  // Calculate stats
+  // Calculate stats including YTD
   const stats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+
     const paid = activeInvoices.filter(inv => inv.status === 'paid');
     const pending = activeInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
     const quotations = activeInvoices.filter(inv => inv.documentType === 'quotation');
     const invoicesDocs = activeInvoices.filter(inv => inv.documentType === 'invoice');
+
+    // YTD: Events completed (past dates with paid status)
+    const completedEvents = paid.filter(inv => {
+      if (!inv.eventDate) return false;
+      return inv.eventDate < todayStr;
+    });
+
+    // Upcoming: Events with future dates (any status except cancelled)
+    const upcomingEvents = activeInvoices.filter(inv => {
+      if (!inv.eventDate || inv.status === 'cancelled') return false;
+      return inv.eventDate >= todayStr;
+    });
+
+    // This month's events
+    const thisMonth = today.getMonth();
+    const thisYear = today.getFullYear();
+    const thisMonthEvents = activeInvoices.filter(inv => {
+      if (!inv.eventDate) return false;
+      const eventDate = new Date(inv.eventDate);
+      return eventDate.getMonth() === thisMonth && eventDate.getFullYear() === thisYear;
+    });
 
     const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
     const pendingAmount = pending.reduce((sum, inv) => sum + inv.total, 0);
@@ -127,6 +162,9 @@ export default function Dashboard() {
       paidCount: paid.length,
       pendingCount: pending.length,
       conversionRate,
+      completedEvents: completedEvents.length,
+      upcomingEvents: upcomingEvents.length,
+      thisMonthEvents: thisMonthEvents.length,
     };
   }, [activeInvoices]);
 
@@ -176,30 +214,35 @@ export default function Dashboard() {
     ].filter(item => item.value > 0);
   }, [activeInvoices]);
 
-  // Calendar events - combine invoice dates with Google Calendar booked dates
-  const calendarEvents = useMemo(() => {
-    const events: { [key: string]: { invoices: StoredInvoice[]; fromCalendar: boolean } } = {};
+  // Calendar events - combine invoice dates with Google Calendar events
+  const calendarEventsMap = useMemo(() => {
+    const events: { [key: string]: { invoices: StoredInvoice[]; calendarEvents: CalendarEventInfo[] } } = {};
 
     // Add invoice events
     activeInvoices.forEach(inv => {
       if (inv.eventDate) {
         const dateKey = inv.eventDate;
-        if (!events[dateKey]) events[dateKey] = { invoices: [], fromCalendar: false };
+        if (!events[dateKey]) events[dateKey] = { invoices: [], calendarEvents: [] };
         events[dateKey].invoices.push(inv);
       }
     });
 
-    // Add Google Calendar booked dates (that don't have matching invoices)
+    // Add Google Calendar events with full details
+    calendarEvents.forEach(evt => {
+      const dateKey = evt.date;
+      if (!events[dateKey]) events[dateKey] = { invoices: [], calendarEvents: [] };
+      events[dateKey].calendarEvents.push(evt);
+    });
+
+    // Also add booked dates that might not have full event info
     calendarBookedDates.forEach(dateKey => {
       if (!events[dateKey]) {
-        events[dateKey] = { invoices: [], fromCalendar: true };
-      } else {
-        events[dateKey].fromCalendar = true;
+        events[dateKey] = { invoices: [], calendarEvents: [{ date: dateKey, title: 'Booked', venue: '' }] };
       }
     });
 
     return events;
-  }, [activeInvoices, calendarBookedDates]);
+  }, [activeInvoices, calendarBookedDates, calendarEvents]);
 
   // Refetch calendar availability when month changes
   useEffect(() => {
@@ -230,28 +273,28 @@ export default function Dashboard() {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    const days: { date: number; dateKey: string; invoices: StoredInvoice[]; hasEvent: boolean; fromCalendar: boolean }[] = [];
+    const days: { date: number; dateKey: string; invoices: StoredInvoice[]; calEvents: CalendarEventInfo[]; hasEvent: boolean }[] = [];
 
     // Empty slots for days before the first day of month
     for (let i = 0; i < firstDay; i++) {
-      days.push({ date: 0, dateKey: '', invoices: [], hasEvent: false, fromCalendar: false });
+      days.push({ date: 0, dateKey: '', invoices: [], calEvents: [], hasEvent: false });
     }
 
     // Days of the month
     for (let day = 1; day <= daysInMonth; day++) {
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const eventData = calendarEvents[dateKey];
+      const eventData = calendarEventsMap[dateKey];
       days.push({
         date: day,
         dateKey,
         invoices: eventData?.invoices || [],
-        hasEvent: !!eventData,
-        fromCalendar: eventData?.fromCalendar || false,
+        calEvents: eventData?.calendarEvents || [],
+        hasEvent: !!eventData && (eventData.invoices.length > 0 || eventData.calendarEvents.length > 0),
       });
     }
 
     return days;
-  }, [calendarDate, calendarEvents]);
+  }, [calendarDate, calendarEventsMap]);
 
   // Recent activity
   const recentActivity = useMemo(() =>
@@ -370,8 +413,8 @@ export default function Dashboard() {
       </header>
 
       <div className="max-w-7xl mx-auto py-6 px-4">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {/* Stats Cards - Row 1: Revenue & Pending */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-emerald-100 p-2 rounded-lg">
@@ -398,15 +441,42 @@ export default function Dashboard() {
             <p className="text-xs text-amber-600 mt-1">{stats.pendingCount} pending</p>
           </div>
 
+          {/* YTD: Completed Shows */}
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="bg-green-100 p-2 rounded-lg">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              </div>
+              <span className="text-slate-500 text-sm">Shows Done (YTD)</span>
+            </div>
+            <p className="text-2xl font-bold text-slate-800">{stats.completedEvents}</p>
+            <p className="text-xs text-green-600 mt-1">Completed performances</p>
+          </div>
+
+          {/* Upcoming Shows */}
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-blue-100 p-2 rounded-lg">
-                <FileText className="w-5 h-5 text-blue-600" />
+                <Calendar className="w-5 h-5 text-blue-600" />
+              </div>
+              <span className="text-slate-500 text-sm">Upcoming</span>
+            </div>
+            <p className="text-2xl font-bold text-slate-800">{stats.upcomingEvents}</p>
+            <p className="text-xs text-blue-600 mt-1">{stats.thisMonthEvents} this month</p>
+          </div>
+        </div>
+
+        {/* Stats Cards - Row 2 */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="bg-slate-100 p-2 rounded-lg">
+                <FileText className="w-5 h-5 text-slate-600" />
               </div>
               <span className="text-slate-500 text-sm">Total Bookings</span>
             </div>
             <p className="text-2xl font-bold text-slate-800">{stats.totalBookings}</p>
-            <p className="text-xs text-blue-600 mt-1">All time</p>
+            <p className="text-xs text-slate-600 mt-1">All time</p>
           </div>
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
@@ -477,20 +547,16 @@ export default function Dashboard() {
               {calendarDays.map((day, idx) => (
                 <div
                   key={idx}
-                  className={`aspect-square p-1 text-xs rounded-lg ${
+                  onClick={() => day.hasEvent && setSelectedDay(day.dateKey === selectedDay ? null : day.dateKey)}
+                  className={`aspect-square p-1 text-xs rounded-lg transition-colors ${
                     day.date === 0
                       ? ''
                       : day.hasEvent
-                        ? 'bg-amber-100 text-amber-800 font-medium cursor-pointer hover:bg-amber-200'
+                        ? day.dateKey === selectedDay
+                          ? 'bg-amber-300 text-amber-900 font-medium cursor-pointer ring-2 ring-amber-500'
+                          : 'bg-amber-100 text-amber-800 font-medium cursor-pointer hover:bg-amber-200'
                         : 'hover:bg-slate-50 text-slate-600'
                   }`}
-                  title={
-                    day.invoices.length > 0
-                      ? day.invoices.map(e => `${e.clientName} - ${e.eventVenue}`).join('\n')
-                      : day.fromCalendar
-                        ? 'Booked (from Google Calendar)'
-                        : ''
-                  }
                 >
                   {day.date > 0 && (
                     <div className="flex flex-col items-center">
@@ -505,6 +571,48 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+
+            {/* Selected Day Details */}
+            {selectedDay && calendarEventsMap[selectedDay] && (
+              <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-amber-900">
+                    {new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </h3>
+                  <button
+                    onClick={() => setSelectedDay(null)}
+                    className="text-amber-600 hover:text-amber-800 text-xs"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {/* Show invoice-based events */}
+                  {calendarEventsMap[selectedDay].invoices.map((inv, i) => (
+                    <div key={`inv-${i}`} className="flex items-start gap-2 text-sm">
+                      <span className="text-amber-500">🎷</span>
+                      <div>
+                        <p className="font-medium text-slate-800">{inv.clientName}</p>
+                        <p className="text-slate-500 text-xs">{inv.eventVenue || 'Venue TBC'} • {inv.eventType}</p>
+                        <p className="text-xs text-amber-700">RM {inv.total.toLocaleString()} - {inv.status}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {/* Show calendar-only events */}
+                  {calendarEventsMap[selectedDay].calendarEvents
+                    .filter(evt => !calendarEventsMap[selectedDay].invoices.some(inv => evt.title.includes(inv.clientName)))
+                    .map((evt, i) => (
+                    <div key={`cal-${i}`} className="flex items-start gap-2 text-sm">
+                      <span className="text-blue-500">📅</span>
+                      <div>
+                        <p className="font-medium text-slate-800">{evt.title.replace('🎷 ', '')}</p>
+                        {evt.venue && <p className="text-slate-500 text-xs">{evt.venue}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Recent Activity */}

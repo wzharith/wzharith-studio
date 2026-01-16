@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { useForm } from 'react-hook-form';
-import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle, CalendarCheck, Loader2 } from 'lucide-react';
+import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle, CalendarCheck } from 'lucide-react';
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 import AvailabilityCalendar from './AvailabilityCalendar';
 import { saveBookingInquiry, isGoogleSyncEnabled } from '@/lib/google-sync';
@@ -40,35 +40,10 @@ export default function BookingForm() {
   } = useForm<BookingFormData>();
 
   const selectedPackage = watch('packageId');
-  const [isSaving, setIsSaving] = useState(false);
 
   const onSubmit = async (data: BookingFormData) => {
     const pkg = siteConfig.packages.find((p) => p.id === data.packageId);
-
-    // Save inquiry to Google Sheets + create draft quotation (if configured)
-    if (isGoogleSyncEnabled()) {
-      setIsSaving(true);
-      try {
-        await saveBookingInquiry({
-          name: data.name,
-          email: data.email,
-          phone: data.phone,
-          eventDate: data.eventDate || selectedDate,
-          eventTime: data.eventTime,
-          venue: data.venue,
-          packageId: data.packageId,
-          packageName: pkg?.name,
-          packagePrice: pkg?.price,
-          songRequests: data.songRequests,
-          message: data.message,
-        });
-        console.log('Inquiry saved to Google Sheets');
-      } catch (error) {
-        console.error('Failed to save inquiry:', error);
-      } finally {
-        setIsSaving(false);
-      }
-    }
+    const eventDateToUse = data.eventDate || selectedDate;
 
     // Format WhatsApp message
     const message = `
@@ -79,7 +54,7 @@ export default function BookingForm() {
 *Phone:* ${data.phone}
 
 *Event Details:*
-📅 Date: ${data.eventDate || selectedDate}
+📅 Date: ${eventDateToUse}
 ⏰ Time: ${data.eventTime}
 📍 Venue: ${data.venue}
 
@@ -90,9 +65,31 @@ export default function BookingForm() {
 ${data.message || 'None'}
     `.trim();
 
-    // Open WhatsApp with pre-filled message
+    // Open WhatsApp FIRST - don't wait for save
     window.open(getWhatsAppUrl(message), '_blank');
     setIsSubmitted(true);
+
+    // Save inquiry to Google Sheets + create draft quotation in background (if configured)
+    if (isGoogleSyncEnabled()) {
+      // Don't await - let it happen in background
+      saveBookingInquiry({
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        eventDate: eventDateToUse,
+        eventTime: data.eventTime,
+        venue: data.venue,
+        packageId: data.packageId,
+        packageName: pkg?.name,
+        packagePrice: pkg?.price,
+        songRequests: data.songRequests,
+        message: data.message,
+      }).then(() => {
+        console.log('Inquiry saved to Google Sheets');
+      }).catch((error) => {
+        console.error('Failed to save inquiry:', error);
+      });
+    }
   };
 
   return (
@@ -344,20 +341,10 @@ ${data.message || 'None'}
               </p>
               <button
                 type="submit"
-                disabled={isSaving}
-                className="px-8 py-4 bg-gradient-to-r from-gold-500 to-gold-600 text-midnight-950 font-sans font-semibold rounded-full hover:from-gold-400 hover:to-gold-500 transition-all shadow-lg hover:shadow-gold-500/25 flex items-center gap-2 disabled:opacity-50"
+                className="px-8 py-4 bg-gradient-to-r from-gold-500 to-gold-600 text-midnight-950 font-sans font-semibold rounded-full hover:from-gold-400 hover:to-gold-500 transition-all shadow-lg hover:shadow-gold-500/25 flex items-center gap-2"
               >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <MessageCircle className="w-4 h-4" />
-                    Send via WhatsApp
-                  </>
-                )}
+                <MessageCircle className="w-4 h-4" />
+                Send via WhatsApp
               </button>
             </div>
           </motion.form>

@@ -81,9 +81,11 @@ export default function InvoiceGenerator() {
   const [historyTab, setHistoryTab] = useState<'active' | 'deleted'>('active');
   const [savedInvoices, setSavedInvoices] = useState<StoredInvoice[]>([]);
 
-  // Filter invoices for display
-  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt);
-  const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt);
+  // Filter and sort invoices for display (latest first)
+  const sortByLatest = (a: StoredInvoice, b: StoredInvoice) =>
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt).sort(sortByLatest);
+  const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt).sort(sortByLatest);
   const visibleInvoices = historyTab === 'active' ? activeInvoices : deletedInvoices;
 
   // Track currently loaded invoice for updates
@@ -1879,7 +1881,19 @@ export default function InvoiceGenerator() {
 
             {/* Panel Footer */}
             <div className="bg-slate-50 px-6 py-4 border-t text-center text-xs text-slate-500">
-              Data stored locally in your browser
+              {isGoogleSyncEnabled() ? (
+                <span className="flex items-center justify-center gap-1">
+                  <Cloud className="w-3 h-3" />
+                  Synced with Google Sheets
+                  {lastSyncTime && (
+                    <span className="text-slate-400 ml-1">
+                      • Last sync: {lastSyncTime.toLocaleTimeString()}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                'Data stored locally in your browser'
+              )}
             </div>
           </div>
         </div>
