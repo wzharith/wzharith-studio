@@ -70,7 +70,7 @@ export default function About() {
             </div>
 
             {/* Floating badge */}
-            <div className="absolute -bottom-8 -right-4 glass rounded-xl px-6 py-4">
+            <div className="absolute -top-4 -right-4 glass rounded-xl px-6 py-4">
               <div className="text-center">
                 <div className="font-display text-2xl font-bold gold-text">71%</div>
                 <div className="font-sans text-xs text-midnight-400">
