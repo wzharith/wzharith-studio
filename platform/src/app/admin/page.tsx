@@ -9,9 +9,8 @@ import {
   saveConfigToGoogle,
   type SiteConfigData,
 } from '@/lib/google-sync';
-
-// Password from environment variable
-const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
+import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
+import { siteConfig } from '@/config/site.config';
 
 interface PackageItem {
   id: string;
@@ -48,10 +47,9 @@ export default function AdminSettings() {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [addons, setAddons] = useState<AddonItem[]>([]);
 
-  // Check authentication
+  // Check authentication (shared auth)
   useEffect(() => {
-    const auth = sessionStorage.getItem('admin_auth');
-    if (auth === 'true') {
+    if (checkAuth()) {
       setIsAuthenticated(true);
     }
     setIsLoading(false);
@@ -66,23 +64,82 @@ export default function AdminSettings() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
+    if (doLogin(password)) {
       setIsAuthenticated(true);
-      sessionStorage.setItem('admin_auth', 'true');
       setError('');
     } else {
       setError('Incorrect password');
     }
   };
 
+  // Default config from site.config.ts
+  const getDefaultConfig = (): SiteConfigData => ({
+    business_name: siteConfig.business.name,
+    business_tagline: siteConfig.business.tagline,
+    business_ssm: siteConfig.business.ssm || '',
+    contact_phone: siteConfig.contact.phone,
+    contact_email: siteConfig.contact.email,
+    contact_whatsapp: siteConfig.contact.whatsapp,
+    social_instagram: siteConfig.social.instagram || '',
+    social_tiktok: siteConfig.social.tiktok || '',
+    social_youtube: siteConfig.social.youtube || '',
+    social_facebook: siteConfig.social.facebook || '',
+    banking_bank: siteConfig.banking.bank,
+    banking_accountName: siteConfig.banking.accountName,
+    banking_accountNumber: siteConfig.banking.accountNumber,
+    transport_baseCharge: siteConfig.transport.zones[0]?.price || 0,
+    transport_perKmRate: 0,
+    transport_freeZone: siteConfig.transport.baseLocation,
+    terms_depositPercent: siteConfig.terms.depositPercent,
+    terms_balanceDueDays: siteConfig.terms.balanceDueDays,
+    terms_cancellationPolicy: siteConfig.terms.cancellationPolicy,
+    terms_latePayment: siteConfig.terms.latePaymentPolicy,
+  });
+
+  const getDefaultPackages = (): PackageItem[] =>
+    siteConfig.packages.map(pkg => ({
+      id: pkg.id,
+      name: pkg.name,
+      description: pkg.description,
+      price: pkg.price,
+      duration: pkg.duration || '',
+    }));
+
+  const getDefaultAddons = (): AddonItem[] =>
+    siteConfig.addons.map((addon, idx) => ({
+      id: String(idx + 1),
+      name: addon.name,
+      price: addon.price,
+    }));
+
   const loadConfig = async () => {
     setIsRefreshing(true);
-    const result = await fetchConfig();
-    if (result.success) {
-      setConfig(result.config);
-      setPackages(result.config.packages || []);
-      setAddons(result.config.addons || []);
+
+    // Initialize with defaults from site.config.ts
+    const defaultConfig = getDefaultConfig();
+    const defaultPackages = getDefaultPackages();
+    const defaultAddons = getDefaultAddons();
+
+    if (isGoogleSyncEnabled()) {
+      const result = await fetchConfig();
+      if (result.success && Object.keys(result.config).length > 0) {
+        // Merge with defaults - cloud takes priority
+        setConfig({ ...defaultConfig, ...result.config });
+        setPackages(result.config.packages || defaultPackages);
+        setAddons(result.config.addons || defaultAddons);
+      } else {
+        // Google Sheets is empty or not configured - use defaults
+        setConfig(defaultConfig);
+        setPackages(defaultPackages);
+        setAddons(defaultAddons);
+      }
+    } else {
+      // No Google sync - use defaults
+      setConfig(defaultConfig);
+      setPackages(defaultPackages);
+      setAddons(defaultAddons);
     }
+
     setIsRefreshing(false);
   };
 

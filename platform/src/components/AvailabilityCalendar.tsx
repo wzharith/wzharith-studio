@@ -24,24 +24,37 @@ export default function AvailabilityCalendar({
   // Combine passed bookedDates with fetched dates (unique values only)
   const allBookedDates = Array.from(new Set([...bookedDates, ...fetchedDates]));
 
-  // Fetch availability from Google Apps Script (if configured)
+  // Fetch availability from Google Apps Script
   useEffect(() => {
     const fetchAvailability = async () => {
       const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_SCRIPT_URL;
-      if (!scriptUrl) return;
+      if (!scriptUrl) {
+        console.log('[AvailabilityCalendar] No script URL configured');
+        return;
+      }
 
       setIsLoading(true);
       try {
-        // Note: Due to CORS, this may not work directly in browser
-        // For production, use a proxy or server-side API
         const month = currentMonth.getMonth() + 1;
         const year = currentMonth.getFullYear();
 
-        // For now, we'll use the passed bookedDates prop
-        // Real implementation would fetch from Google Apps Script
-        setFetchedDates([]);
+        const url = `${scriptUrl}?action=getAvailability&month=${month}&year=${year}`;
+        console.log('[AvailabilityCalendar] Fetching:', url);
+
+        const response = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[AvailabilityCalendar] Got booked dates:', data.bookedDates);
+          setFetchedDates(data.bookedDates || []);
+        } else {
+          console.error('[AvailabilityCalendar] Error response:', response.status);
+        }
       } catch (error) {
-        console.error('Error fetching availability:', error);
+        console.error('[AvailabilityCalendar] Fetch error:', error);
       } finally {
         setIsLoading(false);
       }

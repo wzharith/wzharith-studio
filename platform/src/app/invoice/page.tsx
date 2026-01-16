@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
+import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import {
   saveInvoiceToGoogle,
   createCalendarEvent,
@@ -25,9 +26,7 @@ import {
   type MessageTemplateId,
 } from '@/lib/whatsapp-templates';
 
-// Password from environment variable (set in GitHub Secrets)
-// Falls back to default if not set
-const INVOICE_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
+// Password is now managed by shared auth module (@/lib/auth)
 
 // Storage key for localStorage (derived from business name)
 const STORAGE_KEY = 'studio_invoices';
@@ -96,10 +95,9 @@ export default function InvoiceGenerator() {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Check if already authenticated (session storage)
+  // Check if already authenticated (shared auth)
   useEffect(() => {
-    const auth = sessionStorage.getItem('invoice_auth');
-    if (auth === 'true') {
+    if (checkAuth()) {
       setIsAuthenticated(true);
     }
     setIsLoading(false); // Done checking
@@ -135,17 +133,62 @@ export default function InvoiceGenerator() {
             fetchLatestInvoiceNumber(),
           ]);
 
-          // Handle invoices
+          // Handle invoices - smart merge respecting deletedAt
           if (invoicesResult.success && invoicesResult.invoices.length > 0) {
-            // Cloud data takes priority - merge with any local-only items
-            const cloudIds = new Set(invoicesResult.invoices.map(inv => inv.invoiceNumber));
-            const localOnly = localInvoices.filter(inv => !cloudIds.has(inv.invoiceNumber));
+            const cloudInvoices = invoicesResult.invoices as StoredInvoice[];
 
-            const mergedInvoices = [...invoicesResult.invoices as StoredInvoice[], ...localOnly];
+            // Build lookup maps
+            const cloudMap = new Map(cloudInvoices.map(inv => [inv.invoiceNumber, inv]));
+            const localMap = new Map(localInvoices.map(inv => [inv.invoiceNumber, inv]));
+
+            // Merge logic: for each invoice, decide which version to keep
+            const mergedMap = new Map<string, StoredInvoice>();
+
+            // Add all cloud invoices first
+            for (const cloud of cloudInvoices) {
+              const local = localMap.get(cloud.invoiceNumber);
+              if (local) {
+                // Both exist - merge with preference for more recent deletedAt/status
+                if (local.deletedAt && !cloud.deletedAt) {
+                  // Local was deleted but cloud wasn't - keep local deletion
+                  mergedMap.set(cloud.invoiceNumber, local);
+                } else if (cloud.deletedAt && !local.deletedAt) {
+                  // Cloud was deleted but local wasn't - keep cloud deletion
+                  mergedMap.set(cloud.invoiceNumber, cloud);
+                } else {
+                  // Both have same deletion state - prefer cloud (source of truth)
+                  // But preserve local deletedAt if it exists
+                  mergedMap.set(cloud.invoiceNumber, {
+                    ...cloud,
+                    deletedAt: cloud.deletedAt || local.deletedAt,
+                  });
+                }
+              } else {
+                // Only in cloud
+                mergedMap.set(cloud.invoiceNumber, cloud);
+              }
+            }
+
+            // Add local-only invoices (not in cloud)
+            for (const local of localInvoices) {
+              if (!cloudMap.has(local.invoiceNumber)) {
+                mergedMap.set(local.invoiceNumber, local);
+              }
+            }
+
+            const mergedInvoices = Array.from(mergedMap.values());
             setSavedInvoices(mergedInvoices);
 
             // Update localStorage with merged data
             localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedInvoices));
+
+            console.log('[Sync] Merged invoices:', {
+              cloud: cloudInvoices.length,
+              local: localInvoices.length,
+              merged: mergedInvoices.length,
+              active: mergedInvoices.filter(inv => !inv.deletedAt).length,
+              deleted: mergedInvoices.filter(inv => inv.deletedAt).length,
+            });
           } else if (invoicesResult.success && invoicesResult.invoices.length === 0) {
             // Cloud is empty, push local to cloud
             if (localInvoices.length > 0) {
@@ -183,9 +226,8 @@ export default function InvoiceGenerator() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === INVOICE_PASSWORD) {
+    if (doLogin(password)) {
       setIsAuthenticated(true);
-      sessionStorage.setItem('invoice_auth', 'true');
       setError('');
     } else {
       setError('Incorrect password');
@@ -483,18 +525,24 @@ export default function InvoiceGenerator() {
     setShowHistory(false);
   };
 
-  // Delete invoice from history
-  const deleteInvoice = (id: string) => {
-    if (confirm('Delete this record? (It will be moved to Deleted tab and can be restored)')) {
+  // Delete invoice from history - uses invoiceNumber as unique identifier
+  const deleteInvoice = (invoiceNumber: string) => {
+    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    if (!targetInvoice) {
+      console.error('[Delete] Invoice not found:', invoiceNumber);
+      return;
+    }
+
+    if (confirm(`Delete "${targetInvoice.clientName}" (${invoiceNumber})? It will be moved to Deleted tab.`)) {
       // Soft delete: mark as deleted instead of removing
       const updated = savedInvoices.map(inv =>
-        inv.id === id ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const } : inv
+        inv.invoiceNumber === invoiceNumber ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const } : inv
       );
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedInvoices(updated);
 
       // Sync deletion to Google Sheets
-      const deletedInvoice = updated.find(inv => inv.id === id);
+      const deletedInvoice = updated.find(inv => inv.invoiceNumber === invoiceNumber);
       if (deletedInvoice && isGoogleSyncEnabled()) {
         setSyncStatus('syncing');
         saveInvoiceToGoogle(deletedInvoice as GoogleStoredInvoice)
@@ -511,16 +559,16 @@ export default function InvoiceGenerator() {
     }
   };
 
-  // Restore a soft-deleted invoice
-  const restoreInvoice = (id: string) => {
+  // Restore a soft-deleted invoice - uses invoiceNumber as unique identifier
+  const restoreInvoice = (invoiceNumber: string) => {
     const updated = savedInvoices.map(inv =>
-      inv.id === id ? { ...inv, deletedAt: undefined, status: 'draft' as const } : inv
+      inv.invoiceNumber === invoiceNumber ? { ...inv, deletedAt: undefined, status: 'draft' as const } : inv
     );
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     setSavedInvoices(updated);
 
     // Sync restoration to Google Sheets
-    const restoredInvoice = updated.find(inv => inv.id === id);
+    const restoredInvoice = updated.find(inv => inv.invoiceNumber === invoiceNumber);
     if (restoredInvoice && isGoogleSyncEnabled()) {
       setSyncStatus('syncing');
       saveInvoiceToGoogle(restoredInvoice as GoogleStoredInvoice)
@@ -536,30 +584,55 @@ export default function InvoiceGenerator() {
     }
   };
 
-  // Permanently delete an invoice
-  const permanentlyDeleteInvoice = (id: string) => {
-    if (confirm('Permanently delete this record? This cannot be undone.')) {
-      const updated = savedInvoices.filter(inv => inv.id !== id);
+  // Permanently delete an invoice - uses invoiceNumber as unique identifier
+  const permanentlyDeleteInvoice = (invoiceNumber: string) => {
+    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    if (!targetInvoice) return;
+
+    if (confirm(`Permanently delete "${targetInvoice.clientName}" (${invoiceNumber})? This cannot be undone.`)) {
+      const updated = savedInvoices.filter(inv => inv.invoiceNumber !== invoiceNumber);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedInvoices(updated);
       // Note: This doesn't delete from Google Sheets - manual cleanup needed
     }
   };
 
-  // Update invoice status
-  const updateInvoiceStatusLocal = (id: string, status: StoredInvoice['status']) => {
+  // Update invoice status - uses invoiceNumber as unique identifier (not id)
+  const updateInvoiceStatusLocal = (invoiceNumber: string, status: StoredInvoice['status']) => {
+    // Find the invoice first to log what we're updating
+    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    if (!targetInvoice) {
+      console.error('[Status Update] Invoice not found:', invoiceNumber);
+      alert('Error: Invoice not found');
+      return;
+    }
+
+    console.log('[Status Update] Updating:', {
+      invoiceNumber,
+      clientName: targetInvoice.clientName,
+      from: targetInvoice.status,
+      to: status,
+    });
+
     const updated = savedInvoices.map(inv =>
-      inv.id === id ? { ...inv, status } : inv
+      inv.invoiceNumber === invoiceNumber ? { ...inv, status } : inv
     );
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     setSavedInvoices(updated);
 
     // Sync status to Google
-    const invoice = savedInvoices.find(inv => inv.id === id);
-    if (invoice && isGoogleSyncEnabled()) {
-      import('@/lib/google-sync').then(({ updateInvoiceStatus: updateGoogleStatus }) => {
-        updateGoogleStatus(invoice.invoiceNumber, status);
-      });
+    if (isGoogleSyncEnabled()) {
+      setSyncStatus('syncing');
+      saveInvoiceToGoogle({ ...targetInvoice, status } as GoogleStoredInvoice)
+        .then((result) => {
+          if (result.success) {
+            setSyncStatus('synced');
+            setLastSyncTime(new Date());
+          } else {
+            setSyncStatus('error');
+          }
+        })
+        .catch(() => setSyncStatus('error'));
     }
   };
 
@@ -849,7 +922,7 @@ export default function InvoiceGenerator() {
                 {documentType === 'quotation' ? 'Quotation' : 'Invoice'}
               </h1>
             </div>
-            {/* Desktop buttons */}
+            {/* Desktop buttons - Simplified with auto-sync */}
             <div className="hidden md:flex items-center gap-2">
               <button
                 onClick={startNew}
@@ -865,73 +938,26 @@ export default function InvoiceGenerator() {
                 <History className="w-4 h-4" />
                 History ({activeInvoices.length})
               </button>
-              <button
-                onClick={handleSyncToGoogle}
-                disabled={isSyncing || !isGoogleSyncEnabled()}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors text-sm ${
-                  isGoogleSyncEnabled()
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                }`}
-                title={isGoogleSyncEnabled() ? 'Push all to Google Sheets' : 'Google sync not configured'}
-              >
-                {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : isGoogleSyncEnabled() ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />}
-                {isSyncing ? 'Pushing...' : 'Push'}
-              </button>
-              {isGoogleSyncEnabled() && (
-                <button
-                  onClick={handleRefreshFromCloud}
-                  disabled={syncStatus === 'syncing'}
-                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
-                  title="Fetch latest from Google Sheets"
-                >
-                  <RefreshCw className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                  Pull
-                </button>
-              )}
-              {/* Sync Status Indicator */}
-              {isGoogleSyncEnabled() && (
-                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
-                  syncStatus === 'synced' ? 'bg-green-900/50 text-green-400' :
-                  syncStatus === 'syncing' ? 'bg-amber-900/50 text-amber-400' :
-                  syncStatus === 'offline' ? 'bg-orange-900/50 text-orange-400' :
-                  syncStatus === 'error' ? 'bg-red-900/50 text-red-400' :
-                  'bg-slate-700/50 text-slate-400'
-                }`}>
-                  {syncStatus === 'synced' && <CheckCircle className="w-4 h-4" />}
-                  {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 animate-spin" />}
-                  {syncStatus === 'offline' && <CloudOff className="w-4 h-4" />}
-                  {syncStatus === 'error' && <CloudOff className="w-4 h-4" />}
-                  {syncStatus === 'idle' && <Cloud className="w-4 h-4" />}
-                  <span className="hidden lg:inline">
-                    {syncStatus === 'synced' && lastSyncTime ? `Synced ${lastSyncTime.toLocaleTimeString()}` :
-                     syncStatus === 'syncing' ? 'Syncing...' :
-                     syncStatus === 'offline' ? 'Offline' :
-                     syncStatus === 'error' ? 'Sync Error' :
-                     'Ready'}
-                  </span>
-                </div>
-              )}
               {GOOGLE_SHEET_URL && (
                 <a
                   href={GOOGLE_SHEET_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-500 transition-colors text-sm"
+                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
                   title="View inquiries & invoices in Google Sheets"
                 >
                   <ExternalLink className="w-4 h-4" />
-                  View Sheets
+                  Sheets
                 </a>
               )}
               {eventDate && clientName && isGoogleSyncEnabled() && (
                 <button
                   onClick={handleCreateCalendarEvent}
-                  className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-500 transition-colors text-sm"
+                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
                   title="Create calendar event with reminders"
                 >
                   <Calendar className="w-4 h-4" />
-                  Add to Calendar
+                  Calendar
                 </button>
               )}
               {clientPhone && (
@@ -960,33 +986,62 @@ export default function InvoiceGenerator() {
                   )}
                 </div>
               )}
-              {documentType === 'quotation' && items.length > 0 && (
-                <button
-                  onClick={convertToInvoice}
-                  className="flex items-center gap-2 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-400 transition-colors text-sm"
-                >
-                  <FileText className="w-4 h-4" />
-                  Convert to Invoice
-                </button>
-              )}
+              {/* Save button with sync indicator dot */}
               <button
-                onClick={() => saveInvoice('draft')}
-                className="flex items-center gap-2 bg-emerald-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-emerald-400 transition-colors text-sm"
+                onClick={() => {
+                  saveInvoice('draft');
+                  // Click the dot to retry sync if there's an error
+                }}
+                disabled={syncStatus === 'syncing'}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors text-sm ${
+                  syncStatus === 'error'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : 'bg-emerald-500 text-white hover:bg-emerald-400'
+                }`}
+                title={
+                  syncStatus === 'synced' ? 'Saved & synced to cloud' :
+                  syncStatus === 'syncing' ? 'Saving...' :
+                  syncStatus === 'error' ? 'Click to save & retry sync' :
+                  'Save (auto-syncs to cloud)'
+                }
               >
-                <Save className="w-4 h-4" />
+                {syncStatus === 'syncing' ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
                 Save
+                {/* Sync status dot */}
+                {isGoogleSyncEnabled() && (
+                  <span className={`w-2 h-2 rounded-full ml-1 ${
+                    syncStatus === 'synced' ? 'bg-green-300' :
+                    syncStatus === 'syncing' ? 'bg-yellow-300 animate-pulse' :
+                    syncStatus === 'error' ? 'bg-red-300' :
+                    'bg-slate-300'
+                  }`} />
+                )}
               </button>
               <button
                 onClick={handlePrint}
                 className="flex items-center gap-2 bg-amber-500 text-slate-900 px-3 py-2 rounded-lg font-medium hover:bg-amber-400 transition-colors text-sm"
               >
                 <Printer className="w-4 h-4" />
-                Print / PDF
+                Print
               </button>
+              {/* Contextual buttons */}
+              {documentType === 'quotation' && items.length > 0 && (
+                <button
+                  onClick={convertToInvoice}
+                  className="flex items-center gap-2 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-400 transition-colors text-sm"
+                >
+                  <FileText className="w-4 h-4" />
+                  Convert
+                </button>
+              )}
               {depositPaid > 0 && (
                 <button
                   onClick={handlePrintReceipt}
-                  className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-emerald-500 transition-colors text-sm"
+                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
                   title="Print payment receipt"
                 >
                   <Receipt className="w-4 h-4" />
@@ -995,24 +1050,8 @@ export default function InvoiceGenerator() {
               )}
             </div>
           </div>
-          {/* Mobile buttons - scrollable row */}
+          {/* Mobile buttons - simplified scrollable row */}
           <div className="flex md:hidden items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-            {/* Sync Status Indicator (Mobile) */}
-            {isGoogleSyncEnabled() && (
-              <div className={`flex-shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs ${
-                syncStatus === 'synced' ? 'bg-green-900/50 text-green-400' :
-                syncStatus === 'syncing' ? 'bg-amber-900/50 text-amber-400' :
-                syncStatus === 'offline' ? 'bg-orange-900/50 text-orange-400' :
-                syncStatus === 'error' ? 'bg-red-900/50 text-red-400' :
-                'bg-slate-700/50 text-slate-400'
-              }`}>
-                {syncStatus === 'synced' && <CheckCircle className="w-3 h-3" />}
-                {syncStatus === 'syncing' && <RefreshCw className="w-3 h-3 animate-spin" />}
-                {syncStatus === 'offline' && <CloudOff className="w-3 h-3" />}
-                {syncStatus === 'error' && <CloudOff className="w-3 h-3" />}
-                {syncStatus === 'idle' && <Cloud className="w-3 h-3" />}
-              </div>
-            )}
             <button
               onClick={startNew}
               className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
@@ -1027,16 +1066,38 @@ export default function InvoiceGenerator() {
               <History className="w-3 h-3" />
               {activeInvoices.length}
             </button>
-            {isGoogleSyncEnabled() && (
-              <button
-                onClick={handleRefreshFromCloud}
-                disabled={syncStatus === 'syncing'}
-                className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
-              >
-                <RefreshCw className={`w-3 h-3 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                Pull
-              </button>
-            )}
+            {/* Save with sync indicator */}
+            <button
+              onClick={() => saveInvoice('draft')}
+              disabled={syncStatus === 'syncing'}
+              className={`flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-medium text-xs ${
+                syncStatus === 'error'
+                  ? 'bg-red-500 text-white'
+                  : 'bg-emerald-500 text-white'
+              }`}
+            >
+              {syncStatus === 'syncing' ? (
+                <RefreshCw className="w-3 h-3 animate-spin" />
+              ) : (
+                <Save className="w-3 h-3" />
+              )}
+              Save
+              {isGoogleSyncEnabled() && (
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  syncStatus === 'synced' ? 'bg-green-300' :
+                  syncStatus === 'syncing' ? 'bg-yellow-300 animate-pulse' :
+                  syncStatus === 'error' ? 'bg-red-300' :
+                  'bg-slate-300'
+                }`} />
+              )}
+            </button>
+            <button
+              onClick={handlePrint}
+              className="flex-shrink-0 flex items-center gap-1 bg-amber-500 text-slate-900 px-2 py-1.5 rounded-lg font-medium text-xs"
+            >
+              <Printer className="w-3 h-3" />
+              PDF
+            </button>
             {documentType === 'quotation' && items.length > 0 && (
               <button
                 onClick={convertToInvoice}
@@ -1046,20 +1107,6 @@ export default function InvoiceGenerator() {
                 Convert
               </button>
             )}
-            <button
-              onClick={() => saveInvoice('draft')}
-              className="flex-shrink-0 flex items-center gap-1 bg-emerald-500 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
-            >
-              <Save className="w-3 h-3" />
-              Save
-            </button>
-            <button
-              onClick={handlePrint}
-              className="flex-shrink-0 flex items-center gap-1 bg-amber-500 text-slate-900 px-2 py-1.5 rounded-lg font-medium text-xs"
-            >
-              <Printer className="w-3 h-3" />
-              PDF
-            </button>
           </div>
         </div>
       </div>
@@ -1758,7 +1805,7 @@ export default function InvoiceGenerator() {
                           <div className="font-bold text-amber-600">RM {invoice.total.toFixed(2)}</div>
                           <select
                             value={invoice.status}
-                            onChange={(e) => updateInvoiceStatusLocal(invoice.id, e.target.value as StoredInvoice['status'])}
+                            onChange={(e) => updateInvoiceStatusLocal(invoice.invoiceNumber, e.target.value as StoredInvoice['status'])}
                             className={`text-xs mt-1 px-2 py-1 rounded-full border-0 font-medium ${
                               invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
                               invoice.status === 'sent' ? 'bg-blue-100 text-blue-700' :
@@ -1798,7 +1845,7 @@ export default function InvoiceGenerator() {
                               Load & Edit
                             </button>
                             <button
-                              onClick={() => deleteInvoice(invoice.id)}
+                              onClick={() => deleteInvoice(invoice.invoiceNumber)}
                               className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                               title="Move to Deleted"
                             >
@@ -1808,14 +1855,14 @@ export default function InvoiceGenerator() {
                         ) : (
                           <>
                             <button
-                              onClick={() => restoreInvoice(invoice.id)}
+                              onClick={() => restoreInvoice(invoice.invoiceNumber)}
                               className="flex-1 flex items-center justify-center gap-2 text-emerald-600 hover:bg-emerald-50 py-2 px-3 rounded-lg border border-emerald-200 text-sm font-medium transition-colors"
                             >
                               <RefreshCw className="w-4 h-4" />
                               Restore
                             </button>
                             <button
-                              onClick={() => permanentlyDeleteInvoice(invoice.id)}
+                              onClick={() => permanentlyDeleteInvoice(invoice.invoiceNumber)}
                               className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                               title="Permanently Delete"
                             >

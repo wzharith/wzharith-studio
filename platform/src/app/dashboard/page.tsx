@@ -25,12 +25,11 @@ import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
   fetchInvoicesFromCloud,
+  getAvailability,
   type StoredInvoice,
 } from '@/lib/google-sync';
 import { RevenueChart, StatusPieChart, BookingsChart } from '@/components/DashboardCharts';
-
-// Password from environment variable
-const DASHBOARD_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
+import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 
 export default function Dashboard() {
   // Authentication
@@ -43,14 +42,14 @@ export default function Dashboard() {
   // Data state
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [calendarBookedDates, setCalendarBookedDates] = useState<string[]>([]);
 
   // Calendar state
   const [calendarDate, setCalendarDate] = useState(new Date());
 
-  // Check authentication
+  // Check authentication (shared auth)
   useEffect(() => {
-    const auth = sessionStorage.getItem('dashboard_auth');
-    if (auth === 'true') {
+    if (checkAuth()) {
       setIsAuthenticated(true);
     }
     setIsLoading(false);
@@ -65,9 +64,8 @@ export default function Dashboard() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === DASHBOARD_PASSWORD) {
+    if (doLogin(password)) {
       setIsAuthenticated(true);
-      sessionStorage.setItem('dashboard_auth', 'true');
       setError('');
     } else {
       setError('Incorrect password');
@@ -84,9 +82,19 @@ export default function Dashboard() {
 
     // Try to fetch from cloud
     if (isGoogleSyncEnabled()) {
-      const result = await fetchInvoicesFromCloud();
-      if (result.success && result.invoices.length > 0) {
-        setInvoices(result.invoices as StoredInvoice[]);
+      // Fetch invoices and calendar availability in parallel
+      const [invoicesResult, availabilityResult] = await Promise.all([
+        fetchInvoicesFromCloud(),
+        getAvailability(calendarDate.getMonth() + 1, calendarDate.getFullYear()),
+      ]);
+
+      if (invoicesResult.success && invoicesResult.invoices.length > 0) {
+        setInvoices(invoicesResult.invoices as StoredInvoice[]);
+      }
+
+      if (availabilityResult && availabilityResult.bookedDates) {
+        console.log('[Dashboard] Booked dates from calendar:', availabilityResult.bookedDates);
+        setCalendarBookedDates(availabilityResult.bookedDates);
       }
     }
 
@@ -168,20 +176,48 @@ export default function Dashboard() {
     ].filter(item => item.value > 0);
   }, [activeInvoices]);
 
-  // Calendar events
+  // Calendar events - combine invoice dates with Google Calendar booked dates
   const calendarEvents = useMemo(() => {
-    const events: { [key: string]: StoredInvoice[] } = {};
+    const events: { [key: string]: { invoices: StoredInvoice[]; fromCalendar: boolean } } = {};
 
+    // Add invoice events
     activeInvoices.forEach(inv => {
       if (inv.eventDate) {
         const dateKey = inv.eventDate;
-        if (!events[dateKey]) events[dateKey] = [];
-        events[dateKey].push(inv);
+        if (!events[dateKey]) events[dateKey] = { invoices: [], fromCalendar: false };
+        events[dateKey].invoices.push(inv);
+      }
+    });
+
+    // Add Google Calendar booked dates (that don't have matching invoices)
+    calendarBookedDates.forEach(dateKey => {
+      if (!events[dateKey]) {
+        events[dateKey] = { invoices: [], fromCalendar: true };
+      } else {
+        events[dateKey].fromCalendar = true;
       }
     });
 
     return events;
-  }, [activeInvoices]);
+  }, [activeInvoices, calendarBookedDates]);
+
+  // Refetch calendar availability when month changes
+  useEffect(() => {
+    const fetchCalendarAvailability = async () => {
+      if (!isGoogleSyncEnabled()) return;
+
+      const result = await getAvailability(
+        calendarDate.getMonth() + 1,
+        calendarDate.getFullYear()
+      );
+
+      if (result && result.bookedDates) {
+        setCalendarBookedDates(result.bookedDates);
+      }
+    };
+
+    fetchCalendarAvailability();
+  }, [calendarDate]);
 
   // Calendar navigation
   const prevMonth = () => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1));
@@ -194,20 +230,23 @@ export default function Dashboard() {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    const days: { date: number; dateKey: string; events: StoredInvoice[] }[] = [];
+    const days: { date: number; dateKey: string; invoices: StoredInvoice[]; hasEvent: boolean; fromCalendar: boolean }[] = [];
 
     // Empty slots for days before the first day of month
     for (let i = 0; i < firstDay; i++) {
-      days.push({ date: 0, dateKey: '', events: [] });
+      days.push({ date: 0, dateKey: '', invoices: [], hasEvent: false, fromCalendar: false });
     }
 
     // Days of the month
     for (let day = 1; day <= daysInMonth; day++) {
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const eventData = calendarEvents[dateKey];
       days.push({
         date: day,
         dateKey,
-        events: calendarEvents[dateKey] || [],
+        invoices: eventData?.invoices || [],
+        hasEvent: !!eventData,
+        fromCalendar: eventData?.fromCalendar || false,
       });
     }
 
@@ -441,17 +480,25 @@ export default function Dashboard() {
                   className={`aspect-square p-1 text-xs rounded-lg ${
                     day.date === 0
                       ? ''
-                      : day.events.length > 0
+                      : day.hasEvent
                         ? 'bg-amber-100 text-amber-800 font-medium cursor-pointer hover:bg-amber-200'
                         : 'hover:bg-slate-50 text-slate-600'
                   }`}
-                  title={day.events.map(e => `${e.clientName} - ${e.eventVenue}`).join('\n')}
+                  title={
+                    day.invoices.length > 0
+                      ? day.invoices.map(e => `${e.clientName} - ${e.eventVenue}`).join('\n')
+                      : day.fromCalendar
+                        ? 'Booked (from Google Calendar)'
+                        : ''
+                  }
                 >
                   {day.date > 0 && (
                     <div className="flex flex-col items-center">
                       <span>{day.date}</span>
-                      {day.events.length > 0 && (
-                        <div className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-0.5"></div>
+                      {day.hasEvent && (
+                        <div className={`w-1.5 h-1.5 rounded-full mt-0.5 ${
+                          day.invoices.length > 0 ? 'bg-amber-500' : 'bg-blue-500'
+                        }`}></div>
                       )}
                     </div>
                   )}
