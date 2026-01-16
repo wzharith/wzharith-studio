@@ -46,9 +46,6 @@ export const siteMetadata: Metadata = {
   authors: [{ name: authorName }],
   creator: authorName,
   publisher: businessName,
-  icons: {
-    icon: '/icon.svg',
-  },
   openGraph: {
     title: `${businessName} | ${businessTagline}`,
     description: businessDescription,
