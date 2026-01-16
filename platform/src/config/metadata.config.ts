@@ -1,32 +1,48 @@
 /**
  * Metadata Configuration for Next.js
- * 
+ *
  * This file contains SEO and metadata configuration.
- * It mirrors siteConfig but is usable in server components.
+ *
+ * ⚠️ IMPORTANT: Update these values to match your business!
+ * These should match the values in site.config.ts
  */
 
 import type { Metadata } from 'next';
 
-// These values should match site.config.ts
-const businessName = "WZHarith Studio";
-const businessTagline = "Wedding Saxophone Performance";
-const businessDescription = "Professional live saxophone performance for weddings and events in Malaysia. Make your special day unforgettable with the soulful sounds of the saxophone.";
-const authorName = "Wan Zul Harith";
+// =============================================================================
+// UPDATE THESE VALUES TO MATCH YOUR BUSINESS (must match site.config.ts)
+// =============================================================================
+
+const businessName = "WZHarith Studio";  // ← Update this
+const businessTagline = "Wedding Saxophone Performance";  // ← Update this
+const businessDescription = "Professional live saxophone performance for weddings and events in Malaysia. Make your special day unforgettable with the soulful sounds of the saxophone.";  // ← Update this
+const authorName = "Wan Zul Harith";  // ← Update this
+const serviceType = "saxophone";  // ← Update this (e.g., "violin", "dj", "photography")
+
+// =============================================================================
+// SEO KEYWORDS - Update for your service type
+// =============================================================================
+
+const keywords = [
+  `wedding ${serviceType}`,
+  'live music malaysia',
+  `${serviceType} performance`,
+  'wedding entertainment',
+  'wedding musician',
+  `live ${serviceType}`,
+  'wedding band malaysia',
+  businessName.toLowerCase().replace(/\s+/g, ''),
+  businessName.toLowerCase(),
+];
+
+// =============================================================================
+// METADATA EXPORT (no changes needed below)
+// =============================================================================
 
 export const siteMetadata: Metadata = {
   title: `${businessName} | ${businessTagline}`,
   description: businessDescription,
-  keywords: [
-    'wedding saxophone',
-    'live music malaysia',
-    'saxophone performance',
-    'wedding entertainment',
-    'wzharith',
-    'wzharith studio',
-    'wedding musician',
-    'live saxophone',
-    'wedding band malaysia',
-  ],
+  keywords: keywords,
   authors: [{ name: authorName }],
   creator: authorName,
   publisher: businessName,

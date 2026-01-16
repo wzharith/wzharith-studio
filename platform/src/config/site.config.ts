@@ -1,9 +1,9 @@
 /**
  * Site Configuration
- * 
+ *
  * This file contains all configurable options for the platform.
  * Edit this file to customize the platform for your business.
- * 
+ *
  * For resellers: This is the ONLY file customers need to edit.
  */
 
@@ -127,11 +127,14 @@ interface FeaturesConfig {
 }
 
 // =============================================================================
-// EDIT BELOW THIS LINE TO CUSTOMIZE YOUR PLATFORM
+// ⚠️ EDIT BELOW THIS LINE TO CUSTOMIZE YOUR PLATFORM
+// =============================================================================
+// Replace ALL values below with your own business details.
+// The values shown are DEMO/EXAMPLE values only.
 // =============================================================================
 
 export const siteConfig: SiteConfig = {
-  // Business Identity
+  // Business Identity - ⚠️ RESELLERS: Update with your business details
   business: {
     name: "WZHarith Studio",
     tagline: "Live Saxophone Performance Services",
@@ -141,7 +144,7 @@ export const siteConfig: SiteConfig = {
     serviceType: "saxophone",
   },
 
-  // Contact Information
+  // Contact Information - ⚠️ RESELLERS: Update with your details
   contact: {
     phone: "+60174047441",
     email: "wzharith.studio@gmail.com",
@@ -158,7 +161,7 @@ export const siteConfig: SiteConfig = {
     website: undefined,
   },
 
-  // Banking Details
+  // Banking Details - ⚠️ RESELLERS: Update with your bank account
   banking: {
     bank: "Maybank",
     accountName: "WZHARITH STUDIO",

@@ -3,8 +3,9 @@
 import { useState, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { useForm } from 'react-hook-form';
-import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle } from 'lucide-react';
+import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle, CalendarCheck } from 'lucide-react';
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
+import AvailabilityCalendar from './AvailabilityCalendar';
 
 interface BookingFormData {
   name: string;
@@ -20,8 +21,15 @@ interface BookingFormData {
 
 export default function BookingForm() {
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>('');
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+
+  // Example booked dates - in production, this would come from Google Calendar
+  const bookedDates: string[] = [
+    // Add booked dates here when connected to Google Calendar
+  ];
 
   const {
     register,
@@ -182,6 +190,33 @@ ${data.message || 'None'}
                   Event Details
                 </h4>
 
+                {/* Check Availability Button */}
+                {siteConfig.features.showAvailabilityCalendar && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCalendar(!showCalendar)}
+                    className="w-full mb-4 flex items-center justify-center gap-2 px-4 py-3 glass rounded-lg text-gold-400 hover:bg-gold-500/10 transition-all"
+                  >
+                    <CalendarCheck className="w-4 h-4" />
+                    {showCalendar ? 'Hide Availability' : 'Check Availability'}
+                  </button>
+                )}
+
+                {/* Availability Calendar */}
+                {showCalendar && siteConfig.features.showAvailabilityCalendar && (
+                  <div className="mb-4">
+                    <AvailabilityCalendar
+                      compact
+                      bookedDates={bookedDates}
+                      selectedDate={selectedDate}
+                      onDateSelect={(date) => {
+                        setSelectedDate(date);
+                        // Also update the form field if using react-hook-form
+                      }}
+                    />
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-sm text-midnight-400 mb-1">
@@ -191,6 +226,8 @@ ${data.message || 'None'}
                     <input
                       {...register('eventDate', { required: 'Date is required' })}
                       type="date"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
                       className="w-full px-4 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
                     />
                   </div>

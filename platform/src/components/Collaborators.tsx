@@ -3,6 +3,7 @@
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Users, Mic2, Guitar, Piano, Users2 } from 'lucide-react';
+import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 
 const collaborationTypes = [
   {
@@ -34,6 +35,9 @@ const collaborationTypes = [
 export default function Collaborators() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+
+  // Get first name for personalized message
+  const firstName = siteConfig.business.name.split(' ')[0];
 
   return (
     <section id="collaborators" className="py-24 px-6" ref={ref}>
@@ -104,21 +108,23 @@ export default function Collaborators() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a
-              href="https://wa.me/60174047441?text=Hi%20Harith%2C%20I%27m%20interested%20in%20collaborating%20with%20you!"
+              href={getWhatsAppUrl(`Hi ${firstName}, I'm interested in collaborating with you!`)}
               target="_blank"
               rel="noopener noreferrer"
               className="px-6 py-3 bg-gradient-to-r from-gold-500 to-gold-600 text-midnight-950 font-sans font-semibold rounded-full hover:from-gold-400 hover:to-gold-500 transition-all"
             >
               Let&apos;s Collaborate
             </a>
-            <a
-              href="https://instagram.com/wzharith"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-6 py-3 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all"
-            >
-              Follow @wzharith
-            </a>
+            {siteConfig.social.instagram && (
+              <a
+                href={getSocialUrl('instagram')}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all"
+              >
+                Follow @{siteConfig.social.instagram}
+              </a>
+            )}
           </div>
         </motion.div>
 

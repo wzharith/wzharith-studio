@@ -1,13 +1,33 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight } from 'lucide-react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
+import {
+  saveInvoiceToGoogle,
+  createCalendarEvent,
+  syncAllInvoices,
+  isGoogleSyncEnabled,
+  type StoredInvoice as GoogleStoredInvoice
+} from '@/lib/google-sync';
+import {
+  generateQuotationMessage,
+  generateConfirmationMessage,
+  generateBalanceReminderMessage,
+  generateSongConfirmationMessage,
+  generateThankYouMessage,
+  openWhatsAppWithMessage,
+  messageTemplates,
+  type MessageTemplateId,
+} from '@/lib/whatsapp-templates';
 
 // Password from environment variable (set in GitHub Secrets)
 // Falls back to default if not set
 const INVOICE_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
+
+// Storage key for localStorage (derived from business name)
+const STORAGE_KEY = 'studio_invoices';
 
 interface InvoiceItem {
   id: string;
@@ -69,7 +89,7 @@ export default function InvoiceGenerator() {
 
   // Load saved invoices from localStorage
   useEffect(() => {
-    const stored = localStorage.getItem('wzharith_invoices');
+    const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       setSavedInvoices(JSON.parse(stored));
     }
@@ -88,6 +108,7 @@ export default function InvoiceGenerator() {
 
   // Document type
   const [documentType, setDocumentType] = useState<'quotation' | 'invoice'>('quotation');
+  const [showReceipt, setShowReceipt] = useState(false);
 
   // Invoice details
   const [invoiceNumber, setInvoiceNumber] = useState(`QUO-${new Date().getFullYear()}-001`);
@@ -198,6 +219,16 @@ export default function InvoiceGenerator() {
     }, 100);
   };
 
+  // Print receipt
+  const handlePrintReceipt = () => {
+    setShowReceipt(true);
+    setTimeout(() => {
+      document.title = `${generateFilename()}-RECEIPT`;
+      window.print();
+      setShowReceipt(false);
+    }, 100);
+  };
+
   // Save invoice to localStorage
   const saveInvoice = (status: StoredInvoice['status'] = 'draft') => {
     const invoice: StoredInvoice = {
@@ -239,11 +270,18 @@ export default function InvoiceGenerator() {
       updatedInvoices = [invoice, ...savedInvoices];
     }
 
-    localStorage.setItem('wzharith_invoices', JSON.stringify(updatedInvoices));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedInvoices));
     setSavedInvoices(updatedInvoices);
 
     // Reset current loaded ID after saving
     setCurrentLoadedId(invoice.id);
+
+    // Sync to Google Sheets (if configured)
+    if (isGoogleSyncEnabled()) {
+      saveInvoiceToGoogle(invoice as GoogleStoredInvoice)
+        .then(() => console.log('Synced to Google Sheets'))
+        .catch((err) => console.error('Google sync failed:', err));
+    }
 
     alert(`${documentType === 'quotation' ? 'Quotation' : 'Invoice'} saved!`);
   };
@@ -322,18 +360,26 @@ export default function InvoiceGenerator() {
   const deleteInvoice = (id: string) => {
     if (confirm('Delete this record?')) {
       const updated = savedInvoices.filter(inv => inv.id !== id);
-      localStorage.setItem('wzharith_invoices', JSON.stringify(updated));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedInvoices(updated);
     }
   };
 
   // Update invoice status
-  const updateInvoiceStatus = (id: string, status: StoredInvoice['status']) => {
+  const updateInvoiceStatusLocal = (id: string, status: StoredInvoice['status']) => {
     const updated = savedInvoices.map(inv =>
       inv.id === id ? { ...inv, status } : inv
     );
-    localStorage.setItem('wzharith_invoices', JSON.stringify(updated));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     setSavedInvoices(updated);
+
+    // Sync status to Google
+    const invoice = savedInvoices.find(inv => inv.id === id);
+    if (invoice && isGoogleSyncEnabled()) {
+      import('@/lib/google-sync').then(({ updateInvoiceStatus: updateGoogleStatus }) => {
+        updateGoogleStatus(invoice.invoiceNumber, status);
+      });
+    }
   };
 
   // Package presets (from config)
@@ -381,6 +427,126 @@ export default function InvoiceGenerator() {
       details: preset.details,
       rate: preset.price,
     });
+  };
+
+  // Sync all data to Google
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [showWhatsAppMenu, setShowWhatsAppMenu] = useState(false);
+
+  const handleSyncToGoogle = async () => {
+    if (!isGoogleSyncEnabled()) {
+      alert('Google sync is not configured. Set NEXT_PUBLIC_GOOGLE_SCRIPT_URL in your environment.');
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      await syncAllInvoices(savedInvoices as GoogleStoredInvoice[]);
+      alert('Successfully synced all data to Google Sheets!');
+    } catch (error) {
+      alert('Sync failed. Check console for details.');
+      console.error(error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Create calendar event for current invoice
+  const handleCreateCalendarEvent = async () => {
+    if (!isGoogleSyncEnabled()) {
+      alert('Google sync is not configured.');
+      return;
+    }
+
+    if (!eventDate || !clientName) {
+      alert('Please fill in event date and client name first.');
+      return;
+    }
+
+    try {
+      await createCalendarEvent({
+        clientName,
+        clientPhone,
+        clientEmail,
+        eventType,
+        eventDate,
+        eventTime: `${eventTimeHour}:${eventTimeMinute} ${eventTimePeriod}`,
+        venue: eventVenue,
+        packageName: items[0]?.description || '',
+        total: totalAfterDiscount,
+        depositPaid,
+        invoiceNumber,
+        notes: '',
+      });
+      alert('Calendar event created with reminders!');
+    } catch (error) {
+      alert('Failed to create calendar event.');
+      console.error(error);
+    }
+  };
+
+  // Send WhatsApp message with template
+  const handleSendWhatsApp = (templateId: MessageTemplateId) => {
+    if (!clientPhone) {
+      alert('Please enter client phone number first.');
+      return;
+    }
+
+    let message = '';
+    const deposit = Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100));
+    const eventTimeStr = `${eventTimeHour}:${eventTimeMinute} ${eventTimePeriod}`;
+
+    switch (templateId) {
+      case 'quotation':
+        message = generateQuotationMessage({
+          clientName: clientName || 'Client',
+          eventDate: eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: eventVenue || 'TBC',
+          packageName: items[0]?.description || 'Performance Package',
+          total: totalAfterDiscount,
+          deposit,
+          invoiceNumber,
+        });
+        break;
+      case 'confirmation':
+        message = generateConfirmationMessage({
+          clientName: clientName || 'Client',
+          eventDate: eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: eventVenue || 'TBC',
+          depositAmount: depositPaid,
+          balanceAmount: balanceDue,
+        });
+        break;
+      case 'balance':
+        message = generateBalanceReminderMessage({
+          clientName: clientName || 'Client',
+          eventDate: eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: eventVenue || 'TBC',
+          balanceAmount: balanceDue,
+          dueDate: formattedBalanceDueDate,
+        });
+        break;
+      case 'songs':
+        message = generateSongConfirmationMessage({
+          clientName: clientName || 'Client',
+          eventDate: eventDate || 'TBC',
+          currentSongs: items.map(item => item.description).filter(Boolean),
+        });
+        break;
+      case 'thankyou':
+        message = generateThankYouMessage({
+          clientName: clientName || 'Client',
+          eventType: eventType || 'event',
+          eventDate: eventDate || 'your special day',
+        });
+        break;
+    }
+
+    openWhatsAppWithMessage(clientPhone, message);
+    setShowWhatsAppMenu(false);
   };
 
   // Loading state - prevents flash
@@ -478,6 +644,55 @@ export default function InvoiceGenerator() {
                 <History className="w-4 h-4" />
                 History ({savedInvoices.length})
               </button>
+              <button
+                onClick={handleSyncToGoogle}
+                disabled={isSyncing || !isGoogleSyncEnabled()}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors text-sm ${
+                  isGoogleSyncEnabled()
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                }`}
+                title={isGoogleSyncEnabled() ? 'Sync all to Google Sheets' : 'Google sync not configured'}
+              >
+                {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : isGoogleSyncEnabled() ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />}
+                {isSyncing ? 'Syncing...' : 'Sync'}
+              </button>
+              {eventDate && clientName && isGoogleSyncEnabled() && (
+                <button
+                  onClick={handleCreateCalendarEvent}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-500 transition-colors text-sm"
+                  title="Create calendar event with reminders"
+                >
+                  <Calendar className="w-4 h-4" />
+                  Add to Calendar
+                </button>
+              )}
+              {clientPhone && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowWhatsAppMenu(!showWhatsAppMenu)}
+                    className="flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-green-500 transition-colors text-sm"
+                    title="Send WhatsApp message"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    WhatsApp
+                  </button>
+                  {showWhatsAppMenu && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50">
+                      {messageTemplates.map((template) => (
+                        <button
+                          key={template.id}
+                          onClick={() => handleSendWhatsApp(template.id)}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="font-medium text-slate-800">{template.name}</div>
+                          <div className="text-xs text-slate-500">{template.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {documentType === 'quotation' && items.length > 0 && (
                 <button
                   onClick={convertToInvoice}
@@ -501,6 +716,16 @@ export default function InvoiceGenerator() {
                 <Printer className="w-4 h-4" />
                 Print / PDF
               </button>
+              {depositPaid > 0 && (
+                <button
+                  onClick={handlePrintReceipt}
+                  className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-emerald-500 transition-colors text-sm"
+                  title="Print payment receipt"
+                >
+                  <Receipt className="w-4 h-4" />
+                  Receipt
+                </button>
+              )}
             </div>
           </div>
           {/* Mobile buttons - scrollable row */}
@@ -1050,6 +1275,99 @@ export default function InvoiceGenerator() {
         </div>
       </div>
 
+      {/* Receipt Modal (for printing) */}
+      {showReceipt && (
+        <div id="receipt-preview" className="fixed inset-0 bg-white z-50 p-8 print:p-0">
+          <div className="max-w-md mx-auto bg-white" style={{ fontFamily: 'Segoe UI, system-ui, sans-serif' }}>
+            {/* Receipt Header */}
+            <div className="text-center border-b-4 border-emerald-500 pb-4 mb-6">
+              <h1 className="text-2xl font-bold text-slate-800 mb-1">🎷 {siteConfig.business.name}</h1>
+              <p className="text-slate-500 text-sm">{siteConfig.business.tagline}</p>
+              {siteConfig.business.ssm && <p className="text-slate-400 text-xs mt-1">SSM: {siteConfig.business.ssm}</p>}
+            </div>
+
+            {/* Receipt Title */}
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center gap-2 bg-emerald-100 text-emerald-700 px-4 py-2 rounded-full">
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-bold text-lg">PAYMENT RECEIPT</span>
+              </div>
+              <p className="text-slate-500 text-sm mt-2">Receipt #{invoiceNumber.replace('INV', 'RCP').replace('QUO', 'RCP')}</p>
+              <p className="text-slate-400 text-xs">Date: {new Date().toLocaleDateString('en-MY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            </div>
+
+            {/* Client Info */}
+            <div className="bg-slate-50 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold text-slate-700 mb-2">Received From:</h3>
+              <p className="font-medium text-slate-800">{clientName || 'Client'}</p>
+              {clientPhone && <p className="text-sm text-slate-600">{clientPhone}</p>}
+              {clientEmail && <p className="text-sm text-slate-600">{clientEmail}</p>}
+            </div>
+
+            {/* Event Info */}
+            <div className="bg-amber-50 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold text-amber-700 mb-2">For Event:</h3>
+              <p className="text-sm"><strong>Type:</strong> {eventType}</p>
+              <p className="text-sm"><strong>Date:</strong> {eventDate ? new Date(eventDate).toLocaleDateString('en-MY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'TBC'}</p>
+              <p className="text-sm"><strong>Time:</strong> {formattedTime}</p>
+              <p className="text-sm"><strong>Venue:</strong> {eventVenue || 'TBC'}</p>
+            </div>
+
+            {/* Payment Summary */}
+            <div className="border-2 border-slate-200 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold text-slate-700 mb-3 pb-2 border-b">Payment Summary</h3>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Total Amount</span>
+                  <span>RM {totalAfterDiscount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-emerald-600 font-semibold">
+                  <span>Amount Paid</span>
+                  <span>RM {depositPaid.toFixed(2)}</span>
+                </div>
+                {balanceDue > 0 && (
+                  <div className="flex justify-between pt-2 border-t text-amber-600">
+                    <span>Balance Due</span>
+                    <span>RM {balanceDue.toFixed(2)}</span>
+                  </div>
+                )}
+                {balanceDue <= 0 && (
+                  <div className="flex justify-between pt-2 border-t text-emerald-600 font-bold">
+                    <span>Status</span>
+                    <span>✓ PAID IN FULL</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Payment Method */}
+            <div className="text-center text-sm text-slate-600 mb-6">
+              <p>Payment received via: <strong>Bank Transfer / Cash</strong></p>
+              <p className="text-xs text-slate-400 mt-1">
+                {siteConfig.banking.bank} | {siteConfig.banking.accountNumber}
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="text-center text-xs text-slate-500 pt-4 border-t border-dashed">
+              <p className="font-semibold text-slate-700">{siteConfig.business.name}</p>
+              <p>📞 {getPhoneDisplay()} | ✉️ {siteConfig.contact.email}</p>
+              <p className="mt-2 text-emerald-600">Thank you for your payment! 🎷</p>
+            </div>
+
+            {/* Close button (hidden in print) */}
+            <div className="mt-6 text-center print:hidden">
+              <button
+                onClick={() => setShowReceipt(false)}
+                className="bg-slate-600 text-white px-6 py-2 rounded-lg hover:bg-slate-500"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* History Panel */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/50 z-50 print:hidden" onClick={() => setShowHistory(false)}>
@@ -1121,7 +1439,7 @@ export default function InvoiceGenerator() {
                           <div className="font-bold text-amber-600">RM {invoice.total.toFixed(2)}</div>
                           <select
                             value={invoice.status}
-                            onChange={(e) => updateInvoiceStatus(invoice.id, e.target.value as StoredInvoice['status'])}
+                            onChange={(e) => updateInvoiceStatusLocal(invoice.id, e.target.value as StoredInvoice['status'])}
                             className={`text-xs mt-1 px-2 py-1 rounded-full border-0 font-medium ${
                               invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
                               invoice.status === 'sent' ? 'bg-blue-100 text-blue-700' :
