@@ -95,7 +95,7 @@ export default function About() {
             </h2>
             <div className="font-body text-lg text-midnight-300 space-y-4 mb-10">
               <p>
-                Hi, I&apos;m <strong className="text-white">Wan Zul Harith</strong>, a passionate
+                Hi, I&apos;m <strong className="text-white">Wan Zulmuhammad Harith</strong>, a passionate
                 saxophonist based in Malaysia. What started as a hobby two years ago has
                 blossomed into a beautiful journey of creating magical moments at weddings
                 and special events.
