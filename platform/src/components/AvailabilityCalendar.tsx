@@ -21,8 +21,8 @@ export default function AvailabilityCalendar({
   const [isLoading, setIsLoading] = useState(false);
   const [fetchedDates, setFetchedDates] = useState<string[]>([]);
 
-  // Combine passed bookedDates with fetched dates
-  const allBookedDates = [...new Set([...bookedDates, ...fetchedDates])];
+  // Combine passed bookedDates with fetched dates (unique values only)
+  const allBookedDates = Array.from(new Set([...bookedDates, ...fetchedDates]));
 
   // Fetch availability from Google Apps Script (if configured)
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function AvailabilityCalendar({
         // For production, use a proxy or server-side API
         const month = currentMonth.getMonth() + 1;
         const year = currentMonth.getFullYear();
-        
+
         // For now, we'll use the passed bookedDates prop
         // Real implementation would fetch from Google Apps Script
         setFetchedDates([]);
@@ -66,12 +66,12 @@ export default function AvailabilityCalendar({
 
   // Generate calendar days
   const days = [];
-  
+
   // Empty cells for days before the 1st
   for (let i = 0; i < startingDay; i++) {
     days.push(null);
   }
-  
+
   // Days of the month
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -79,7 +79,7 @@ export default function AvailabilityCalendar({
     const isSelected = selectedDate === dateStr;
     const isPast = new Date(dateStr) < new Date(new Date().toDateString());
     const isToday = new Date(dateStr).toDateString() === new Date().toDateString();
-    
+
     days.push({
       day,
       dateStr,
