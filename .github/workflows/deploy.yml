@@ -37,13 +37,30 @@ jobs:
         working-directory: ./platform
         run: rm -rf .next out
 
+      - name: Debug - Check if secrets exist
+        run: |
+          echo "Checking secrets..."
+          if [ -n "${{ secrets.NEXT_PUBLIC_GOOGLE_SCRIPT_URL }}" ]; then
+            echo "✅ NEXT_PUBLIC_GOOGLE_SCRIPT_URL is set"
+          else
+            echo "❌ NEXT_PUBLIC_GOOGLE_SCRIPT_URL is NOT set"
+          fi
+          if [ -n "${{ secrets.NEXT_PUBLIC_INVOICE_PASSWORD }}" ]; then
+            echo "✅ NEXT_PUBLIC_INVOICE_PASSWORD is set"
+          else
+            echo "❌ NEXT_PUBLIC_INVOICE_PASSWORD is NOT set"
+          fi
+
       - name: Build
         working-directory: ./platform
         env:
           NEXT_PUBLIC_INVOICE_PASSWORD: ${{ secrets.NEXT_PUBLIC_INVOICE_PASSWORD }}
           NEXT_PUBLIC_GOOGLE_SCRIPT_URL: ${{ secrets.NEXT_PUBLIC_GOOGLE_SCRIPT_URL }}
           NEXT_PUBLIC_GOOGLE_SHEET_URL: ${{ secrets.NEXT_PUBLIC_GOOGLE_SHEET_URL }}
-        run: npm run build
+        run: |
+          echo "Building with env vars..."
+          echo "SCRIPT_URL length: ${#NEXT_PUBLIC_GOOGLE_SCRIPT_URL}"
+          npm run build
 
       - name: Add .nojekyll
         run: touch ./platform/out/.nojekyll
