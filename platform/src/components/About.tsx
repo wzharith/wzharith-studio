@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useInView } from 'framer-motion';
 import { useRef } from 'react';
 import { Heart, Music2, Star, Users } from 'lucide-react';
+import Image from 'next/image';
 
 const features = [
   {
@@ -45,33 +46,20 @@ export default function About() {
             className="relative"
           >
             <div className="aspect-[4/5] rounded-2xl overflow-hidden glass p-1">
-              <div className="w-full h-full rounded-xl bg-gradient-to-br from-midnight-800 to-midnight-900 flex items-center justify-center relative overflow-hidden">
-                {/* Decorative saxophone silhouette */}
-                <svg
-                  className="absolute inset-0 w-full h-full opacity-10"
-                  viewBox="0 0 100 100"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <text
-                    x="50%"
-                    y="50%"
-                    dominantBaseline="middle"
-                    textAnchor="middle"
-                    className="fill-gold-400"
-                    style={{ fontSize: '60px' }}
-                  >
-                    🎷
-                  </text>
-                </svg>
-
-                {/* Profile placeholder with gradient */}
-                <div className="relative z-10 text-center p-8">
-                  <div className="w-32 h-32 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center mb-6 shadow-2xl">
-                    <span className="text-5xl">🎷</span>
-                  </div>
-                  <h3 className="font-display text-2xl font-semibold text-white mb-2">
-                    Wan Zul Harith
+              <div className="w-full h-full rounded-xl overflow-hidden relative">
+                <Image
+                  src="/images/wzharith-profile.jpg"
+                  alt="Wan Zulmuhammad Harith - Saxophonist"
+                  fill
+                  className="object-cover object-[center_80%]"
+                  priority
+                />
+                {/* Gradient overlay for text readability */}
+                <div className="absolute inset-0 bg-gradient-to-t from-midnight-950/90 via-transparent to-transparent" />
+                {/* Name overlay at bottom */}
+                <div className="absolute bottom-0 left-0 right-0 p-6 text-center">
+                  <h3 className="font-display text-2xl font-semibold text-white mb-1">
+                    Wan Zulmuhammad Harith
                   </h3>
                   <p className="font-body text-gold-400 italic">
                     Saxophonist
@@ -81,7 +69,7 @@ export default function About() {
             </div>
 
             {/* Floating badge */}
-            <div className="absolute -bottom-4 -right-4 glass rounded-xl px-6 py-4">
+            <div className="absolute -bottom-8 -right-4 glass rounded-xl px-6 py-4">
               <div className="text-center">
                 <div className="font-display text-2xl font-bold gold-text">71%</div>
                 <div className="font-sans text-xs text-midnight-400">

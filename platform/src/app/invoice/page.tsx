@@ -1069,64 +1069,110 @@ export default function InvoiceGenerator() {
               )}
             </div>
           </div>
-          {/* Mobile buttons - simplified scrollable row */}
-          <div className="flex md:hidden items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-            <button
-              onClick={startNew}
-              className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
-            >
-              <Plus className="w-3 h-3" />
-              New
-            </button>
-            <button
-              onClick={() => setShowHistory(true)}
-              className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
-            >
-              <History className="w-3 h-3" />
-              {activeInvoices.length}
-            </button>
-            {/* Save with sync indicator */}
-            <button
-              onClick={() => saveInvoice('draft')}
-              disabled={syncStatus === 'syncing'}
-              className={`flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-medium text-xs ${
-                syncStatus === 'error'
-                  ? 'bg-red-500 text-white'
-                  : 'bg-emerald-500 text-white'
-              }`}
-            >
-              {syncStatus === 'syncing' ? (
-                <RefreshCw className="w-3 h-3 animate-spin" />
-              ) : (
-                <Save className="w-3 h-3" />
-              )}
-              Save
-              {isGoogleSyncEnabled() && (
-                <span className={`w-1.5 h-1.5 rounded-full ${
-                  syncStatus === 'synced' ? 'bg-green-300' :
-                  syncStatus === 'syncing' ? 'bg-yellow-300 animate-pulse' :
-                  syncStatus === 'error' ? 'bg-red-300' :
-                  'bg-slate-300'
-                }`} />
-              )}
-            </button>
-            <button
-              onClick={handlePrint}
-              className="flex-shrink-0 flex items-center gap-1 bg-amber-500 text-slate-900 px-2 py-1.5 rounded-lg font-medium text-xs"
-            >
-              <Printer className="w-3 h-3" />
-              PDF
-            </button>
-            {documentType === 'quotation' && items.length > 0 && (
+          {/* Mobile buttons - two rows for better touch targets */}
+          <div className="flex md:hidden flex-col gap-2">
+            {/* Row 1: Main actions */}
+            <div className="flex items-center gap-2">
               <button
-                onClick={convertToInvoice}
-                className="flex-shrink-0 flex items-center gap-1 bg-blue-500 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
+                type="button"
+                onClick={startNew}
+                className="flex items-center gap-1 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium text-xs"
               >
-                <FileText className="w-3 h-3" />
-                Convert
+                <Plus className="w-4 h-4" />
+                New
               </button>
+              <button
+                type="button"
+                onClick={() => setShowHistory(true)}
+                className="flex items-center gap-1 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium text-xs"
+              >
+                <History className="w-4 h-4" />
+                {activeInvoices.length}
+              </button>
+              <button
+                type="button"
+                onClick={() => saveInvoice('draft')}
+                disabled={syncStatus === 'syncing'}
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-xs ${
+                  syncStatus === 'error'
+                    ? 'bg-red-500 text-white'
+                    : 'bg-emerald-500 text-white'
+                }`}
+              >
+                {syncStatus === 'syncing' ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="flex items-center gap-1 bg-amber-500 text-slate-900 px-3 py-2 rounded-lg font-medium text-xs"
+              >
+                <Printer className="w-4 h-4" />
+                PDF
+              </button>
+            </div>
+            {/* Row 2: WhatsApp & Convert (only show if relevant) */}
+            {(clientPhone || (documentType === 'quotation' && items.length > 0)) && (
+              <div className="flex items-center gap-2">
+                {clientPhone && (
+                  <button
+                    type="button"
+                    onClick={() => setShowWhatsAppMenu(!showWhatsAppMenu)}
+                    className="flex items-center gap-1 bg-green-600 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    WhatsApp
+                  </button>
+                )}
+                {documentType === 'quotation' && items.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={convertToInvoice}
+                    className="flex items-center gap-1 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Convert to Invoice
+                  </button>
+                )}
+              </div>
             )}
           </div>
+          {/* WhatsApp menu modal */}
+          {showWhatsAppMenu && (
+            <div className="md:hidden fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowWhatsAppMenu(false)}>
+              <div
+                className="w-full bg-white rounded-t-2xl p-4 pb-8"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="w-12 h-1 bg-slate-300 rounded-full mx-auto mb-4" />
+                <h3 className="font-semibold text-slate-800 mb-3">Send WhatsApp Message</h3>
+                <div className="space-y-2">
+                  {messageTemplates.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => handleSendWhatsApp(template.id)}
+                      className="w-full text-left p-3 bg-slate-50 rounded-lg active:bg-slate-100"
+                    >
+                      <div className="font-medium text-slate-800">{template.name}</div>
+                      <div className="text-xs text-slate-500">{template.description}</div>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppMenu(false)}
+                  className="w-full mt-4 p-3 bg-slate-200 rounded-lg font-medium text-slate-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
