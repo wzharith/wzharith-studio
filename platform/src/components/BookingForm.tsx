@@ -41,22 +41,46 @@ export default function BookingForm() {
 
   const selectedPackage = watch('packageId');
 
+  // Helper to format 24h time to 12h AM/PM format
+  const formatTimeToAMPM = (time24: string): string => {
+    if (!time24) return '';
+    const [hours, minutes] = time24.split(':').map(Number);
+    const period = hours >= 12 ? 'PM' : 'AM';
+    const hour12 = hours % 12 || 12;
+    return `${hour12}:${minutes.toString().padStart(2, '0')} ${period}`;
+  };
+
+  // Helper to format date to readable format
+  const formatDate = (dateStr: string): string => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('en-MY', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
   const onSubmit = async (data: BookingFormData) => {
     const pkg = siteConfig.packages.find((p) => p.id === data.packageId);
     const eventDateToUse = data.eventDate || selectedDate;
+    const formattedTime = formatTimeToAMPM(data.eventTime);
+    const formattedDate = formatDate(eventDateToUse);
 
-    // Format WhatsApp message
+    // Format WhatsApp message - no emojis for compatibility
     const message = `
-*New Booking Inquiry*
+*New Booking Inquiry - ${siteConfig.business.name}*
 
-*Name:* ${data.name}
-*Email:* ${data.email}
-*Phone:* ${data.phone}
+*Client Details*
+Name: ${data.name}
+Email: ${data.email}
+Phone: ${data.phone}
 
-*Event Details:*
-📅 Date: ${eventDateToUse}
-⏰ Time: ${data.eventTime}
-📍 Venue: ${data.venue}
+*Event Details*
+Date: ${formattedDate}
+Time: ${formattedTime}
+Venue: ${data.venue}
 
 *Package:* ${pkg?.name || 'Not specified'}
 *Song Requests:* ${data.songRequests || 'None'}
@@ -77,7 +101,7 @@ ${data.message || 'None'}
         email: data.email,
         phone: data.phone,
         eventDate: eventDateToUse,
-        eventTime: data.eventTime,
+        eventTime: formattedTime, // Use formatted AM/PM time
         venue: data.venue,
         packageId: data.packageId,
         packageName: pkg?.name,

@@ -239,6 +239,7 @@ export default function InvoiceGenerator() {
   // Document type
   const [documentType, setDocumentType] = useState<'quotation' | 'invoice'>('quotation');
   const [showReceipt, setShowReceipt] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<StoredInvoice['status']>('draft');
 
   // Invoice details
   const [invoiceNumber, setInvoiceNumber] = useState(`QUO-${new Date().getFullYear()}-001`);
@@ -329,9 +330,10 @@ export default function InvoiceGenerator() {
     ? balanceDueDate.toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
     : `${siteConfig.terms.balanceDueDays} days before event`;
 
-  // Generate filename for PDF (uses only - as separator)
+  // Generate filename for PDF (uses only event date - no time)
   const generateFilename = () => {
-    const dateStr = eventDate || new Date().toISOString().split('T')[0];
+    // Use event date only, no invoice date or time
+    const dateStr = eventDate || 'TBC';
     const cleanClientName = (clientName || 'Client').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '-').substring(0, 30);
     return `${dateStr}-${cleanClientName}-${invoiceNumber}`;
   };
@@ -486,6 +488,7 @@ export default function InvoiceGenerator() {
     setDocumentType('quotation');
     setInvoiceNumber(nextNumber);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
+    setCurrentStatus('draft');
     setClientName('');
     setClientPhone('');
     setClientEmail('');
@@ -510,6 +513,10 @@ export default function InvoiceGenerator() {
     setLinkedQuotationNumber(invoice.linkedQuotationNumber || null);
     setDocumentType(invoice.documentType);
     setInvoiceNumber(invoice.invoiceNumber);
+    setCurrentStatus(invoice.status);
+    // Set invoice date from createdAt (the document creation date)
+    const createdDate = invoice.createdAt ? new Date(invoice.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+    setInvoiceDate(createdDate);
     setClientName(invoice.clientName);
     setClientPhone(invoice.clientPhone);
     setClientEmail(invoice.clientEmail);
@@ -1547,12 +1554,19 @@ export default function InvoiceGenerator() {
                         <span className="text-slate-600">Deposit Paid</span>
                         <span>- RM {depositPaid.toFixed(2)}</span>
                       </div>
-                      <div className="flex justify-between py-3 border-b-4 border-amber-500 font-bold text-lg">
-                        <span>Balance Due</span>
-                        <span className={balanceDue < 0 ? 'text-green-600' : ''}>
-                          RM {balanceDue.toFixed(2)}
-                        </span>
-                      </div>
+                      {currentStatus === 'paid' ? (
+                        <div className="flex justify-between py-3 border-b-4 border-emerald-500 font-bold text-lg text-emerald-600">
+                          <span>Balance Due</span>
+                          <span>RM 0.00 ✓ PAID</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between py-3 border-b-4 border-amber-500 font-bold text-lg">
+                          <span>Balance Due</span>
+                          <span className={balanceDue < 0 ? 'text-green-600' : ''}>
+                            RM {balanceDue.toFixed(2)}
+                          </span>
+                        </div>
+                      )}
                     </>
                   )}
                   {documentType === 'quotation' && (
@@ -2066,6 +2080,28 @@ export default function InvoiceGenerator() {
           @page {
             size: A4;
             margin: 5mm;
+          }
+
+          /* Receipt printing styles - when receipt is visible */
+          body:has(#receipt-preview) #invoice-preview,
+          body:has(#receipt-preview) .print-hidden,
+          body:has(#receipt-preview) .bg-slate-900,
+          body:has(#receipt-preview) .bg-slate-800 {
+            display: none !important;
+          }
+
+          #receipt-preview {
+            position: static !important;
+            padding: 5mm !important;
+            background: white !important;
+          }
+
+          #receipt-preview .print\\:hidden {
+            display: none !important;
+          }
+
+          #receipt-preview button {
+            display: none !important;
           }
         }
       `}</style>

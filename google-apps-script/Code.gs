@@ -367,14 +367,38 @@ function generateNextQuotationNumber() {
 
 /**
  * Parse time helpers
+ * Handles both formats:
+ * - 24h format from HTML time picker: "20:00"
+ * - 12h format: "8:00 PM" or "8:00PM"
  */
 function parseTimeHour(timeStr) {
   if (!timeStr) return '7';
-  const match = timeStr.match(/(\d{1,2})/);
-  if (!match) return '7';
-  let hour = parseInt(match[1]);
-  if (hour > 12) hour = hour - 12;
-  return String(hour);
+
+  // Check if already in 12h format with AM/PM
+  const ampmMatch = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (ampmMatch) {
+    return ampmMatch[1]; // Already 12h format
+  }
+
+  // 24h format: "20:00"
+  const match24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (match24) {
+    let hour = parseInt(match24[1]);
+    if (hour === 0) return '12'; // Midnight
+    if (hour > 12) hour = hour - 12;
+    return String(hour);
+  }
+
+  // Fallback: extract first number
+  const numMatch = timeStr.match(/(\d{1,2})/);
+  if (numMatch) {
+    let hour = parseInt(numMatch[1]);
+    if (hour > 12) hour = hour - 12;
+    if (hour === 0) hour = 12;
+    return String(hour);
+  }
+
+  return '7';
 }
 
 function parseTimeMinute(timeStr) {
@@ -385,12 +409,21 @@ function parseTimeMinute(timeStr) {
 
 function parseTimePeriod(timeStr) {
   if (!timeStr) return 'PM';
-  if (timeStr.toLowerCase().includes('am')) return 'AM';
-  const match = timeStr.match(/(\d{1,2})/);
-  if (match) {
-    const hour = parseInt(match[1]);
-    if (hour >= 12 && hour < 24) return 'PM';
+
+  // Check for explicit AM/PM
+  const upperStr = timeStr.toUpperCase();
+  if (upperStr.includes('AM')) return 'AM';
+  if (upperStr.includes('PM')) return 'PM';
+
+  // 24h format: determine AM/PM from hour
+  const match24 = timeStr.match(/^(\d{1,2}):/);
+  if (match24) {
+    const hour = parseInt(match24[1]);
+    if (hour >= 0 && hour < 12) return 'AM';
+    return 'PM';
   }
+
+  // Default to PM for events
   return 'PM';
 }
 
