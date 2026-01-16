@@ -6,6 +6,11 @@
 
 const GOOGLE_SCRIPT_URL = process.env.NEXT_PUBLIC_GOOGLE_SCRIPT_URL || '';
 
+// Debug: Log if Google sync is configured (runs once at module load)
+if (typeof window !== 'undefined') {
+  console.log('[GoogleSync] URL configured:', GOOGLE_SCRIPT_URL ? 'YES (' + GOOGLE_SCRIPT_URL.substring(0, 50) + '...)' : 'NO - secrets not set during build');
+}
+
 export interface StoredInvoice {
   id: string;
   invoiceNumber: string;
