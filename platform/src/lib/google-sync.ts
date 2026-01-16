@@ -98,6 +98,85 @@ export const isGoogleSyncEnabled = (): boolean => {
 };
 
 /**
+ * Sync status type for UI
+ */
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
+
+/**
+ * Fetch all invoices from Google Sheets
+ * Returns array of StoredInvoice objects or null if fetch fails
+ */
+export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invoices: StoredInvoice[]; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    console.log('[Fetch] Google sync not configured');
+    return { success: false, invoices: [], error: 'Google sync not configured' };
+  }
+
+  try {
+    const url = `${GOOGLE_SCRIPT_URL}?action=getInvoices`;
+    console.log('[Fetch] Fetching from:', url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    console.log('[Fetch] Response status:', response.status, response.statusText);
+
+    if (response.ok) {
+      const text = await response.text();
+      console.log('[Fetch] Response body:', text.substring(0, 500));
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseError) {
+        console.error('[Fetch] JSON parse error:', parseError);
+        return { success: false, invoices: [], error: 'Invalid JSON: ' + text.substring(0, 100) };
+      }
+
+      // The Apps Script returns invoices with camelCase keys
+      // Map them to ensure all required fields exist
+      const invoices: StoredInvoice[] = (data.invoices || data || []).map((inv: Record<string, unknown>) => ({
+        id: String(inv.id || inv.invoiceNumber || ''),
+        invoiceNumber: String(inv.invoiceNumber || ''),
+        documentType: (inv.documentType === 'invoice' ? 'invoice' : 'quotation') as 'quotation' | 'invoice',
+        clientName: String(inv.clientName || ''),
+        clientPhone: String(inv.clientPhone || ''),
+        clientEmail: String(inv.clientEmail || ''),
+        clientAddress: String(inv.clientAddress || ''),
+        eventType: String(inv.eventType || ''),
+        eventDate: String(inv.eventDate || ''),
+        eventTimeHour: String(inv.eventTimeHour || '12'),
+        eventTimeMinute: String(inv.eventTimeMinute || '00'),
+        eventTimePeriod: String(inv.eventTimePeriod || 'PM'),
+        eventVenue: String(inv.eventVenue || ''),
+        items: Array.isArray(inv.items) ? inv.items : [],
+        discount: Number(inv.discount) || 0,
+        discountType: (inv.discountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent',
+        depositPaid: Number(inv.depositPaid) || 0,
+        total: Number(inv.total) || 0,
+        createdAt: String(inv.createdAt || new Date().toISOString()),
+        status: (['draft', 'sent', 'paid', 'cancelled'].includes(String(inv.status))
+          ? inv.status
+          : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
+        linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
+        convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
+      }));
+
+      return { success: true, invoices };
+    }
+
+    const errorText = await response.text();
+    console.error('[Fetch] Error response:', response.status, errorText);
+    return { success: false, invoices: [], error: `HTTP ${response.status}: ${errorText.substring(0, 100)}` };
+  } catch (error) {
+    console.error('[Fetch] Network error:', error);
+    return { success: false, invoices: [], error: String(error) };
+  }
+};
+
+/**
  * Save invoice to Google Sheets
  */
 export const saveInvoiceToGoogle = async (invoice: StoredInvoice): Promise<{ success: boolean; error?: string }> => {
@@ -176,20 +255,36 @@ export const syncAllInvoices = async (invoices: StoredInvoice[]): Promise<{ succ
       data: JSON.stringify(invoices),
     });
 
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
+    const url = `${GOOGLE_SCRIPT_URL}?${params}`;
+    console.log('[Sync] Sending to:', url.substring(0, 100) + '...');
+    console.log('[Sync] Invoices count:', invoices.length);
+
+    const response = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
     });
 
+    console.log('[Sync] Response status:', response.status, response.statusText);
+
     if (response.ok) {
-      const result = await response.json();
-      return { success: result.success, saved: invoices.length, error: result.error };
+      const text = await response.text();
+      console.log('[Sync] Response body:', text);
+
+      try {
+        const result = JSON.parse(text);
+        return { success: result.success !== false, saved: invoices.length, error: result.error };
+      } catch (parseError) {
+        console.error('[Sync] JSON parse error:', parseError);
+        return { success: false, error: 'Invalid JSON response: ' + text.substring(0, 100) };
+      }
     }
 
-    return { success: true, saved: invoices.length };
+    const errorText = await response.text();
+    console.error('[Sync] Error response:', errorText);
+    return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 100)}` };
   } catch (error) {
-    console.error('Error syncing invoices:', error);
-    return { success: true, saved: invoices.length, error: 'Request sent but response unclear' };
+    console.error('[Sync] Network error:', error);
+    return { success: false, error: 'Network error: ' + String(error) };
   }
 };
 

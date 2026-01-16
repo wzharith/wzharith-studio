@@ -9,7 +9,9 @@ import {
   createCalendarEvent,
   syncAllInvoices,
   isGoogleSyncEnabled,
-  type StoredInvoice as GoogleStoredInvoice
+  fetchInvoicesFromCloud,
+  type StoredInvoice as GoogleStoredInvoice,
+  type SyncStatus,
 } from '@/lib/google-sync';
 import {
   generateQuotationMessage,
@@ -81,6 +83,11 @@ export default function InvoiceGenerator() {
   const [currentLoadedId, setCurrentLoadedId] = useState<string | null>(null);
   const [linkedQuotationNumber, setLinkedQuotationNumber] = useState<string | null>(null);
 
+  // Cloud sync status
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+
   // Check if already authenticated (session storage)
   useEffect(() => {
     const auth = sessionStorage.getItem('invoice_auth');
@@ -90,13 +97,64 @@ export default function InvoiceGenerator() {
     setIsLoading(false); // Done checking
   }, []);
 
-  // Load saved invoices from localStorage
+  // Load invoices: fetch from cloud first, fallback to localStorage
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      setSavedInvoices(JSON.parse(stored));
-    }
-  }, []);
+    const loadInvoices = async () => {
+      if (!isInitialLoad) return;
+
+      // First, load from localStorage as immediate cache
+      const stored = localStorage.getItem(STORAGE_KEY);
+      const localInvoices: StoredInvoice[] = stored ? JSON.parse(stored) : [];
+
+      if (localInvoices.length > 0) {
+        setSavedInvoices(localInvoices);
+      }
+
+      // Then try to fetch from cloud
+      if (isGoogleSyncEnabled()) {
+        setSyncStatus('syncing');
+
+        try {
+          const result = await fetchInvoicesFromCloud();
+
+          if (result.success && result.invoices.length > 0) {
+            // Cloud data takes priority - merge with any local-only items
+            const cloudIds = new Set(result.invoices.map(inv => inv.invoiceNumber));
+            const localOnly = localInvoices.filter(inv => !cloudIds.has(inv.invoiceNumber));
+
+            const mergedInvoices = [...result.invoices as StoredInvoice[], ...localOnly];
+            setSavedInvoices(mergedInvoices);
+
+            // Update localStorage with merged data
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedInvoices));
+
+            setSyncStatus('synced');
+            setLastSyncTime(new Date());
+          } else if (result.success && result.invoices.length === 0) {
+            // Cloud is empty, push local to cloud
+            if (localInvoices.length > 0) {
+              await syncAllInvoices(localInvoices as GoogleStoredInvoice[]);
+            }
+            setSyncStatus('synced');
+            setLastSyncTime(new Date());
+          } else {
+            // Fetch failed, stay with local data
+            setSyncStatus('offline');
+          }
+        } catch (error) {
+          console.error('Error loading from cloud:', error);
+          setSyncStatus('offline');
+        }
+      } else {
+        // No cloud sync configured
+        setSyncStatus('idle');
+      }
+
+      setIsInitialLoad(false);
+    };
+
+    loadInvoices();
+  }, [isInitialLoad]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -281,9 +339,22 @@ export default function InvoiceGenerator() {
 
     // Sync to Google Sheets (if configured)
     if (isGoogleSyncEnabled()) {
+      setSyncStatus('syncing');
       saveInvoiceToGoogle(invoice as GoogleStoredInvoice)
-        .then(() => console.log('Synced to Google Sheets'))
-        .catch((err) => console.error('Google sync failed:', err));
+        .then((result) => {
+          if (result.success) {
+            setSyncStatus('synced');
+            setLastSyncTime(new Date());
+            console.log('Synced to Google Sheets');
+          } else {
+            setSyncStatus('error');
+            console.error('Google sync failed:', result.error);
+          }
+        })
+        .catch((err) => {
+          setSyncStatus('error');
+          console.error('Google sync failed:', err);
+        });
     }
 
     alert(`${documentType === 'quotation' ? 'Quotation' : 'Invoice'} saved!`);
@@ -443,14 +514,54 @@ export default function InvoiceGenerator() {
     }
 
     setIsSyncing(true);
+    setSyncStatus('syncing');
     try {
-      await syncAllInvoices(savedInvoices as GoogleStoredInvoice[]);
-      alert('Successfully synced all data to Google Sheets!');
+      console.log('[Invoice] Starting sync of', savedInvoices.length, 'invoices');
+      const result = await syncAllInvoices(savedInvoices as GoogleStoredInvoice[]);
+      console.log('[Invoice] Sync result:', result);
+
+      if (result.success) {
+        setSyncStatus('synced');
+        setLastSyncTime(new Date());
+        alert(`Successfully synced ${savedInvoices.length} items to Google Sheets!`);
+      } else {
+        setSyncStatus('error');
+        alert('Sync error: ' + (result.error || 'Unknown error'));
+      }
     } catch (error) {
-      alert('Sync failed. Check console for details.');
-      console.error(error);
+      setSyncStatus('error');
+      console.error('[Invoice] Sync exception:', error);
+      alert('Sync failed: ' + String(error));
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Manual refresh from cloud
+  const handleRefreshFromCloud = async () => {
+    if (!isGoogleSyncEnabled()) {
+      alert('Google sync is not configured.');
+      return;
+    }
+
+    setSyncStatus('syncing');
+    try {
+      const result = await fetchInvoicesFromCloud();
+      if (result.success) {
+        const cloudInvoices = result.invoices as StoredInvoice[];
+        setSavedInvoices(cloudInvoices);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudInvoices));
+        setSyncStatus('synced');
+        setLastSyncTime(new Date());
+        alert(`Loaded ${cloudInvoices.length} invoices from cloud!`);
+      } else {
+        setSyncStatus('error');
+        alert('Failed to fetch from cloud: ' + result.error);
+      }
+    } catch (error) {
+      setSyncStatus('error');
+      console.error('Refresh failed:', error);
+      alert('Failed to refresh from cloud.');
     }
   };
 
@@ -655,11 +766,45 @@ export default function InvoiceGenerator() {
                     ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                     : 'bg-slate-300 text-slate-500 cursor-not-allowed'
                 }`}
-                title={isGoogleSyncEnabled() ? 'Sync all to Google Sheets' : 'Google sync not configured'}
+                title={isGoogleSyncEnabled() ? 'Push all to Google Sheets' : 'Google sync not configured'}
               >
                 {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : isGoogleSyncEnabled() ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />}
-                {isSyncing ? 'Syncing...' : 'Sync'}
+                {isSyncing ? 'Pushing...' : 'Push'}
               </button>
+              {isGoogleSyncEnabled() && (
+                <button
+                  onClick={handleRefreshFromCloud}
+                  disabled={syncStatus === 'syncing'}
+                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
+                  title="Fetch latest from Google Sheets"
+                >
+                  <RefreshCw className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                  Pull
+                </button>
+              )}
+              {/* Sync Status Indicator */}
+              {isGoogleSyncEnabled() && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+                  syncStatus === 'synced' ? 'bg-green-900/50 text-green-400' :
+                  syncStatus === 'syncing' ? 'bg-amber-900/50 text-amber-400' :
+                  syncStatus === 'offline' ? 'bg-orange-900/50 text-orange-400' :
+                  syncStatus === 'error' ? 'bg-red-900/50 text-red-400' :
+                  'bg-slate-700/50 text-slate-400'
+                }`}>
+                  {syncStatus === 'synced' && <CheckCircle className="w-4 h-4" />}
+                  {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  {syncStatus === 'offline' && <CloudOff className="w-4 h-4" />}
+                  {syncStatus === 'error' && <CloudOff className="w-4 h-4" />}
+                  {syncStatus === 'idle' && <Cloud className="w-4 h-4" />}
+                  <span className="hidden lg:inline">
+                    {syncStatus === 'synced' && lastSyncTime ? `Synced ${lastSyncTime.toLocaleTimeString()}` :
+                     syncStatus === 'syncing' ? 'Syncing...' :
+                     syncStatus === 'offline' ? 'Offline' :
+                     syncStatus === 'error' ? 'Sync Error' :
+                     'Ready'}
+                  </span>
+                </div>
+              )}
               {GOOGLE_SHEET_URL && (
                 <a
                   href={GOOGLE_SHEET_URL}
@@ -745,6 +890,22 @@ export default function InvoiceGenerator() {
           </div>
           {/* Mobile buttons - scrollable row */}
           <div className="flex md:hidden items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+            {/* Sync Status Indicator (Mobile) */}
+            {isGoogleSyncEnabled() && (
+              <div className={`flex-shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs ${
+                syncStatus === 'synced' ? 'bg-green-900/50 text-green-400' :
+                syncStatus === 'syncing' ? 'bg-amber-900/50 text-amber-400' :
+                syncStatus === 'offline' ? 'bg-orange-900/50 text-orange-400' :
+                syncStatus === 'error' ? 'bg-red-900/50 text-red-400' :
+                'bg-slate-700/50 text-slate-400'
+              }`}>
+                {syncStatus === 'synced' && <CheckCircle className="w-3 h-3" />}
+                {syncStatus === 'syncing' && <RefreshCw className="w-3 h-3 animate-spin" />}
+                {syncStatus === 'offline' && <CloudOff className="w-3 h-3" />}
+                {syncStatus === 'error' && <CloudOff className="w-3 h-3" />}
+                {syncStatus === 'idle' && <Cloud className="w-3 h-3" />}
+              </div>
+            )}
             <button
               onClick={startNew}
               className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
@@ -759,6 +920,16 @@ export default function InvoiceGenerator() {
               <History className="w-3 h-3" />
               {savedInvoices.length}
             </button>
+            {isGoogleSyncEnabled() && (
+              <button
+                onClick={handleRefreshFromCloud}
+                disabled={syncStatus === 'syncing'}
+                className="flex-shrink-0 flex items-center gap-1 bg-slate-700 text-white px-2 py-1.5 rounded-lg font-medium text-xs"
+              >
+                <RefreshCw className={`w-3 h-3 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                Pull
+              </button>
+            )}
             {documentType === 'quotation' && items.length > 0 && (
               <button
                 onClick={convertToInvoice}

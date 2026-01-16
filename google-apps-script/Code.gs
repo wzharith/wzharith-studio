@@ -214,9 +214,13 @@ function saveInvoice(invoice) {
 /**
  * Sync all invoices from client (batch update)
  */
-function syncAllInvoices(invoices) {
+/**
+ * Save multiple invoices (batch)
+ * Called by doGet with action=saveInvoices
+ */
+function saveInvoices(invoices) {
   let saved = 0;
-  let errors = [];
+  const errors = [];
 
   for (const invoice of invoices) {
     try {
@@ -227,7 +231,12 @@ function syncAllInvoices(invoices) {
     }
   }
 
-  return { success: true, saved, errors };
+  return { success: errors.length === 0, saved, errors };
+}
+
+// Alias for backwards compatibility
+function syncAllInvoices(invoices) {
+  return saveInvoices(invoices);
 }
 
 /**
@@ -378,10 +387,10 @@ function parseTimePeriod(timeStr) {
  */
 function getInvoices() {
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEETS.INVOICES);
-  if (!sheet) return [];
+  if (!sheet) return { success: true, invoices: [] };
 
   const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return [];
+  if (data.length <= 1) return { success: true, invoices: [] };
 
   const headers = data[0];
   const invoices = [];
@@ -405,7 +414,7 @@ function getInvoices() {
     invoices.push(invoice);
   }
 
-  return invoices;
+  return { success: true, invoices };
 }
 
 /**
