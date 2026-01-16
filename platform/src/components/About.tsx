@@ -4,7 +4,9 @@ import { motion } from 'framer-motion';
 import { useInView } from 'framer-motion';
 import { useRef } from 'react';
 import { Heart, Music2, Star, Users } from 'lucide-react';
-import Image from 'next/image';
+
+// Get basePath for GitHub Pages deployment
+const basePath = process.env.NODE_ENV === 'production' ? '/wzharith-studio' : '';
 
 const features = [
   {
@@ -47,12 +49,11 @@ export default function About() {
           >
             <div className="aspect-[4/5] rounded-2xl overflow-hidden glass p-1">
               <div className="w-full h-full rounded-xl overflow-hidden relative">
-                <Image
-                  src="/images/wzharith-profile.jpg"
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`${basePath}/images/wzharith-profile.jpg`}
                   alt="Wan Zulmuhammad Harith - Saxophonist"
-                  fill
-                  className="object-cover object-[center_80%]"
-                  priority
+                  className="absolute inset-0 w-full h-full object-cover object-[center_80%]"
                 />
                 {/* Gradient overlay for text readability */}
                 <div className="absolute inset-0 bg-gradient-to-t from-midnight-950/90 via-transparent to-transparent" />
