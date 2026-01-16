@@ -37,6 +37,8 @@ jobs:
         working-directory: ./platform
         env:
           NEXT_PUBLIC_INVOICE_PASSWORD: ${{ secrets.INVOICE_PASSWORD }}
+          NEXT_PUBLIC_GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
+          NEXT_PUBLIC_GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
         run: npm run build
 
       - name: Upload artifact
