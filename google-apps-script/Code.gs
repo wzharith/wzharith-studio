@@ -32,6 +32,7 @@ const BALANCE_REMINDER_DAYS = 3;
 // Sheet names
 const SHEETS = {
   INVOICES: 'Invoices',
+  INQUIRIES: 'Inquiries',
   EVENTS: 'Events',
   CONFIG: 'Config',
 };
@@ -95,6 +96,9 @@ function doPost(e) {
         break;
       case 'syncAll':
         result = syncAllInvoices(data.invoices);
+        break;
+      case 'saveBookingInquiry':
+        result = saveBookingInquiry(data.inquiry);
         break;
       default:
         result = { error: 'Unknown action' };
@@ -207,6 +211,149 @@ function syncAllInvoices(invoices) {
   }
 
   return { success: true, saved, errors };
+}
+
+/**
+ * Save a booking inquiry from the website form
+ * Also creates a draft quotation automatically
+ */
+function saveBookingInquiry(inquiry) {
+  // Save to Inquiries sheet
+  const sheet = getOrCreateSheet(SHEETS.INQUIRIES, [
+    'Inquiry ID',
+    'Date Received',
+    'Name',
+    'Email',
+    'Phone',
+    'Event Date',
+    'Event Time',
+    'Venue',
+    'Package',
+    'Song Requests',
+    'Message',
+    'Status',
+    'Quotation Number',
+    'Notes',
+  ]);
+
+  const inquiryId = 'INQ-' + new Date().getTime();
+  const quotationNumber = generateNextQuotationNumber();
+
+  const rowData = [
+    inquiryId,
+    new Date().toISOString(),
+    inquiry.name,
+    inquiry.email,
+    inquiry.phone,
+    inquiry.eventDate,
+    inquiry.eventTime,
+    inquiry.venue,
+    inquiry.packageName || 'Not specified',
+    inquiry.songRequests || '',
+    inquiry.message || '',
+    'new', // Status: new, contacted, quoted, booked, lost
+    quotationNumber,
+    '',
+  ];
+
+  sheet.appendRow(rowData);
+
+  // Also create a draft invoice/quotation
+  const draftInvoice = {
+    invoiceNumber: quotationNumber,
+    documentType: 'quotation',
+    status: 'draft',
+    clientName: inquiry.name,
+    clientPhone: inquiry.phone,
+    clientEmail: inquiry.email,
+    clientAddress: '',
+    eventType: 'Wedding Reception',
+    eventDate: inquiry.eventDate,
+    eventTimeHour: parseTimeHour(inquiry.eventTime),
+    eventTimeMinute: parseTimeMinute(inquiry.eventTime),
+    eventTimePeriod: parseTimePeriod(inquiry.eventTime),
+    eventVenue: inquiry.venue,
+    items: [],
+    discount: 0,
+    discountType: 'amount',
+    depositPaid: 0,
+    total: 0,
+    createdAt: new Date().toISOString(),
+  };
+
+  // Add package if specified
+  if (inquiry.packageId) {
+    draftInvoice.items = [{
+      id: '1',
+      description: inquiry.packageName || 'Performance Package',
+      details: 'As discussed',
+      quantity: 1,
+      rate: inquiry.packagePrice || 0,
+    }];
+    draftInvoice.total = inquiry.packagePrice || 0;
+  }
+
+  saveInvoice(draftInvoice);
+
+  return {
+    success: true,
+    inquiryId: inquiryId,
+    quotationNumber: quotationNumber,
+  };
+}
+
+/**
+ * Generate next quotation number
+ */
+function generateNextQuotationNumber() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEETS.INVOICES);
+  if (!sheet) {
+    return 'QUO-' + new Date().getFullYear() + '-001';
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const year = new Date().getFullYear();
+  const prefix = 'QUO-' + year + '-';
+
+  let maxNum = 0;
+  for (let i = 1; i < data.length; i++) {
+    const invoiceNum = data[i][0];
+    if (invoiceNum && invoiceNum.startsWith(prefix)) {
+      const num = parseInt(invoiceNum.replace(prefix, ''));
+      if (num > maxNum) maxNum = num;
+    }
+  }
+
+  return prefix + String(maxNum + 1).padStart(3, '0');
+}
+
+/**
+ * Parse time helpers
+ */
+function parseTimeHour(timeStr) {
+  if (!timeStr) return '7';
+  const match = timeStr.match(/(\d{1,2})/);
+  if (!match) return '7';
+  let hour = parseInt(match[1]);
+  if (hour > 12) hour = hour - 12;
+  return String(hour);
+}
+
+function parseTimeMinute(timeStr) {
+  if (!timeStr) return '00';
+  const match = timeStr.match(/:(\d{2})/);
+  return match ? match[1] : '00';
+}
+
+function parseTimePeriod(timeStr) {
+  if (!timeStr) return 'PM';
+  if (timeStr.toLowerCase().includes('am')) return 'AM';
+  const match = timeStr.match(/(\d{1,2})/);
+  if (match) {
+    const hour = parseInt(match[1]);
+    if (hour >= 12 && hour < 24) return 'PM';
+  }
+  return 'PM';
 }
 
 /**

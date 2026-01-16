@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle } from 'lucide-react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 import {
@@ -28,6 +28,9 @@ const INVOICE_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
 
 // Storage key for localStorage (derived from business name)
 const STORAGE_KEY = 'studio_invoices';
+
+// Google Sheet URL for viewing inquiries (optional)
+const GOOGLE_SHEET_URL = process.env.NEXT_PUBLIC_GOOGLE_SHEET_URL || '';
 
 interface InvoiceItem {
   id: string;
@@ -657,6 +660,18 @@ export default function InvoiceGenerator() {
                 {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : isGoogleSyncEnabled() ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />}
                 {isSyncing ? 'Syncing...' : 'Sync'}
               </button>
+              {GOOGLE_SHEET_URL && (
+                <a
+                  href={GOOGLE_SHEET_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-500 transition-colors text-sm"
+                  title="View inquiries & invoices in Google Sheets"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  View Sheets
+                </a>
+              )}
               {eventDate && clientName && isGoogleSyncEnabled() && (
                 <button
                   onClick={handleCreateCalendarEvent}

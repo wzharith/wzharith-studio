@@ -1,6 +1,6 @@
 /**
  * Google Apps Script API Integration
- * 
+ *
  * Handles syncing invoices and events with Google Sheets and Calendar
  */
 
@@ -58,6 +58,36 @@ export interface AvailabilityData {
   month: number;
   year: number;
   bookedDates: string[];
+}
+
+export interface InquiryFromSheet {
+  inquiryId: string;
+  dateReceived: string;
+  name: string;
+  email: string;
+  phone: string;
+  eventDate: string;
+  eventTime: string;
+  venue: string;
+  packageName: string;
+  songRequests: string;
+  message: string;
+  status: string;
+  quotationNumber: string;
+}
+
+export interface BookingInquiry {
+  name: string;
+  email: string;
+  phone: string;
+  eventDate: string;
+  eventTime: string;
+  venue: string;
+  packageId?: string;
+  packageName?: string;
+  packagePrice?: number;
+  songRequests?: string;
+  message?: string;
 }
 
 /**
@@ -165,11 +195,11 @@ export const getAvailability = async (month: number, year: number): Promise<Avai
     // For GET requests, we can use fetch normally (with a JSONP workaround or proxy)
     // But due to CORS limitations, we'll need to handle this differently
     const url = `${GOOGLE_SCRIPT_URL}?action=getAvailability&month=${month}&year=${year}`;
-    
+
     // Create a script element for JSONP-style loading
     return new Promise((resolve) => {
       const callback = `googleCallback_${Date.now()}`;
-      
+
       // Fallback: Return empty data if can't fetch
       setTimeout(() => {
         resolve({
@@ -196,6 +226,48 @@ export const getAvailability = async (month: number, year: number): Promise<Avai
   } catch (error) {
     console.error('Error getting availability:', error);
     return null;
+  }
+};
+
+/**
+ * Save booking inquiry from website form
+ * Creates a draft quotation automatically
+ */
+export const saveBookingInquiry = async (
+  inquiry: BookingInquiry
+): Promise<{ success: boolean; inquiryId?: string; quotationNumber?: string; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    console.log('Google sync not configured - inquiry not saved to cloud');
+    return { success: false, error: 'Google sync not configured' };
+  }
+
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'saveBookingInquiry',
+        inquiry,
+      }),
+      mode: 'no-cors',
+    });
+
+    // no-cors mode doesn't give us response body
+    // Generate a local quotation number as fallback
+    const year = new Date().getFullYear();
+    const timestamp = Date.now().toString().slice(-4);
+    const quotationNumber = `QUO-${year}-${timestamp}`;
+
+    return {
+      success: true,
+      inquiryId: `INQ-${Date.now()}`,
+      quotationNumber,
+    };
+  } catch (error) {
+    console.error('Error saving inquiry:', error);
+    return { success: false, error: String(error) };
   }
 };
 
