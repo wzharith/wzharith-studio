@@ -20,10 +20,10 @@
 // =============================================================================
 
 // Google Sheet ID (from the URL: docs.google.com/spreadsheets/d/SHEET_ID/edit)
-const SHEET_ID = 'YOUR_SHEET_ID_HERE';
+const SHEET_ID = 'REMOVED_TO_NOT_COMMIT';
 
 // Google Calendar ID (usually your email for primary calendar)
-const CALENDAR_ID = 'YOUR_CALENDAR_ID_HERE';
+const CALENDAR_ID = 'REMOVED_TO_NOT_COMMIT';
 
 // Reminder settings (days before event)
 const SONG_CONFIRMATION_DAYS = 14;
@@ -42,7 +42,7 @@ const SHEETS = {
 // =============================================================================
 
 /**
- * Handle GET requests (for availability checking)
+ * Handle GET requests (for availability checking and write operations for CORS compatibility)
  */
 function doGet(e) {
   const action = e.parameter.action;
@@ -60,8 +60,25 @@ function doGet(e) {
       case 'getInvoices':
         result = getInvoices();
         break;
+      // Write operations via GET for CORS compatibility
+      case 'saveInvoice':
+        const invoiceData = JSON.parse(e.parameter.data);
+        result = saveInvoice(invoiceData);
+        break;
+      case 'saveInvoices':
+        const invoicesData = JSON.parse(e.parameter.data);
+        result = saveInvoices(invoicesData);
+        break;
+      case 'createCalendarEvent':
+        const eventData = JSON.parse(e.parameter.data);
+        result = createCalendarEvent(eventData);
+        break;
+      case 'saveBookingInquiry':
+        const inquiryData = JSON.parse(e.parameter.data);
+        result = saveBookingInquiry(inquiryData);
+        break;
       default:
-        result = { error: 'Unknown action' };
+        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry'] };
     }
 
     return ContentService
@@ -69,7 +86,7 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService
-      .createTextOutput(JSON.stringify({ error: error.message }))
+      .createTextOutput(JSON.stringify({ error: error.message, stack: error.stack }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
