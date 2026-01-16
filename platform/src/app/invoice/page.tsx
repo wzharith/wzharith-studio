@@ -330,10 +330,20 @@ export default function InvoiceGenerator() {
     ? balanceDueDate.toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
     : `${siteConfig.terms.balanceDueDays} days before event`;
 
+  // Helper to extract date only from ISO timestamp
+  const extractDateOnly = (dateStr: string): string => {
+    if (!dateStr) return 'TBC';
+    // Handle ISO format: 2026-03-07T16:00:00.000Z -> 2026-03-07
+    if (dateStr.includes('T')) {
+      return dateStr.split('T')[0];
+    }
+    return dateStr;
+  };
+
   // Generate filename for PDF (uses only event date - no time)
   const generateFilename = () => {
-    // Use event date only, no invoice date or time
-    const dateStr = eventDate || 'TBC';
+    // Use event date only, extract from ISO if needed
+    const dateStr = extractDateOnly(eventDate);
     const cleanClientName = (clientName || 'Client').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '-').substring(0, 30);
     return `${dateStr}-${cleanClientName}-${invoiceNumber}`;
   };
@@ -1592,7 +1602,7 @@ export default function InvoiceGenerator() {
                     <p><strong>Bank:</strong> {siteConfig.banking.bank}</p>
                     <p><strong>Account Name:</strong> {siteConfig.banking.accountName}</p>
                     <p><strong>Account No:</strong> {siteConfig.banking.accountNumber}</p>
-                    <p><strong>Reference:</strong> {eventDate ? eventDate.replace(/-/g, '') : 'BOOKING'}-{(clientName || 'CLIENT').split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
+                    <p><strong>Reference:</strong> {extractDateOnly(eventDate).replace(/-/g, '') || 'BOOKING'}-{(clientName || 'CLIENT').split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
                   </div>
                 </div>
 

@@ -139,6 +139,22 @@ const parseEventTime = (timeStr: string): { hour: string; minute: string; period
 };
 
 /**
+ * Extract date only from ISO timestamp or date string
+ * Handles: "2026-03-07T16:00:00.000Z" -> "2026-03-07"
+ *          "2026-03-07" -> "2026-03-07"
+ */
+const extractDateOnly = (dateStr: unknown): string => {
+  if (!dateStr) return '';
+  const str = String(dateStr);
+  // Handle ISO format with T separator
+  if (str.includes('T')) {
+    return str.split('T')[0];
+  }
+  // Already in YYYY-MM-DD format or other format
+  return str;
+};
+
+/**
  * Latest invoice number response from Apps Script
  */
 export interface LatestInvoiceNumber {
@@ -250,7 +266,7 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           clientEmail: String(inv.clientEmail || ''),
           clientAddress: String(inv.clientAddress || ''),
           eventType: String(inv.eventType || ''),
-          eventDate: String(inv.eventDate || ''),
+          eventDate: extractDateOnly(inv.eventDate),
           eventTimeHour: String(inv.eventTimeHour || timeParts.hour || '7'),
           eventTimeMinute: String(inv.eventTimeMinute || timeParts.minute || '00'),
           eventTimePeriod: String(inv.eventTimePeriod || timeParts.period || 'PM'),
