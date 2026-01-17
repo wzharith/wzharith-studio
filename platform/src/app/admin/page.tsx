@@ -64,6 +64,37 @@ export default function AdminSettings() {
   const [archiveYear, setArchiveYear] = useState(new Date().getFullYear());
   const [showHistory, setShowHistory] = useState(false);
 
+  // Local cache info
+  const [localCacheInfo, setLocalCacheInfo] = useState<{ count: number; size: string } | null>(null);
+
+  // Load local cache info
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('studio_invoices');
+      if (stored) {
+        try {
+          const invoices = JSON.parse(stored);
+          const sizeKB = (new Blob([stored]).size / 1024).toFixed(1);
+          setLocalCacheInfo({ count: invoices.length, size: `${sizeKB} KB` });
+        } catch {
+          setLocalCacheInfo(null);
+        }
+      } else {
+        setLocalCacheInfo({ count: 0, size: '0 KB' });
+      }
+    }
+  }, []);
+
+  // Clear local cache
+  const handleClearCache = () => {
+    if (confirm('This will clear all locally cached invoices. Data in Google Sheets will NOT be affected. Continue?')) {
+      localStorage.removeItem('studio_invoices');
+      setLocalCacheInfo({ count: 0, size: '0 KB' });
+      setSaveMessage('Local cache cleared! Refresh dashboard to load fresh data from cloud.');
+      setTimeout(() => setSaveMessage(''), 5000);
+    }
+  };
+
   // Check authentication (shared auth)
   useEffect(() => {
     if (checkAuth()) {
@@ -1044,6 +1075,35 @@ export default function AdminSettings() {
                       )}
                     </div>
                   )}
+                </div>
+
+                {/* Clear Local Cache */}
+                <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Trash2 className="w-5 h-5 text-red-600" />
+                    <h3 className="font-medium text-red-800">Clear Local Cache</h3>
+                  </div>
+                  <p className="text-sm text-red-700 mb-3">
+                    Clear locally cached invoices in your browser. Use this if your local data is out of sync with Google Sheets.
+                    This does NOT delete any data from Google Sheets.
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-red-600">
+                      {localCacheInfo ? (
+                        <span>Local cache: <strong>{localCacheInfo.count}</strong> invoices ({localCacheInfo.size})</span>
+                      ) : (
+                        <span>No local cache detected</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleClearCache}
+                      disabled={!localCacheInfo || localCacheInfo.count === 0}
+                      className="flex items-center gap-2 bg-red-500 hover:bg-red-600 disabled:bg-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Clear Cache
+                    </button>
+                  </div>
                 </div>
 
                 {/* Current Status */}
