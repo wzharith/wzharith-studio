@@ -20,6 +20,8 @@ import {
   CheckCircle,
   AlertCircle,
   XCircle,
+  Settings,
+  Home,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -384,13 +386,34 @@ export default function Dashboard() {
       <header className="bg-slate-900 text-white py-4 px-6 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link href="/" className="text-amber-400 hover:text-amber-300">
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
             <h1 className="text-xl font-semibold flex items-center gap-2">
               <LayoutDashboard className="w-5 h-5 text-amber-400" />
               Dashboard
             </h1>
+            {/* Navigation Links */}
+            <nav className="hidden sm:flex items-center gap-1 ml-4 border-l border-slate-700 pl-4">
+              <Link
+                href="/"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <Home className="w-3 h-3" />
+                Site
+              </Link>
+              <Link
+                href="/invoice"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <FileText className="w-3 h-3" />
+                Invoice
+              </Link>
+              <Link
+                href="/admin"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <Settings className="w-3 h-3" />
+                Admin
+              </Link>
+            </nav>
           </div>
           <div className="flex items-center gap-3">
             <Link

@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink } from 'lucide-react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home } from 'lucide-react';
 import Link from 'next/link';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
+import { useCloudConfig } from '@/lib/cloud-config';
 import {
   saveInvoiceToGoogle,
   createCalendarEvent,
@@ -75,6 +76,9 @@ export default function InvoiceGenerator() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+
+  // Cloud config for packages/addons (fetched from Google Sheets)
+  const { packages: cloudPackages, addons: cloudAddons, isLoading: configLoading, refresh: refreshConfig } = useCloudConfig();
 
   // History panel
   const [showHistory, setShowHistory] = useState(false);
@@ -655,16 +659,16 @@ export default function InvoiceGenerator() {
     }
   };
 
-  // Package presets (from config)
-  const packagePresets = siteConfig.packages.map(pkg => ({
+  // Package presets (from cloud config, falls back to site.config.ts)
+  const packagePresets = cloudPackages.map(pkg => ({
     name: pkg.name,
     price: pkg.price,
     details: pkg.description,
     setDeposit: true,
   }));
 
-  // Add-on presets (from config)
-  const addOnPresets = siteConfig.addons.map(addon => ({
+  // Add-on presets (from cloud config, falls back to site.config.ts)
+  const addOnPresets = cloudAddons.map(addon => ({
     name: addon.name,
     price: addon.price,
     details: addon.description,
@@ -933,13 +937,33 @@ export default function InvoiceGenerator() {
           {/* Top row - Back & Title */}
           <div className="flex items-center justify-between mb-3 sm:mb-0">
             <div className="flex items-center gap-2 sm:gap-4">
-              <Link href="/" className="flex items-center gap-1 sm:gap-2 text-amber-400 hover:text-amber-300 text-sm">
-                <ArrowLeft className="w-4 h-4" />
-                <span className="hidden sm:inline">Back to Site</span>
-              </Link>
               <h1 className="text-base sm:text-xl font-semibold">
                 {documentType === 'quotation' ? 'Quotation' : 'Invoice'}
               </h1>
+              {/* Navigation Links */}
+              <nav className="hidden sm:flex items-center gap-1 ml-2 border-l border-slate-700 pl-3">
+                <Link
+                  href="/"
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+                >
+                  <Home className="w-3 h-3" />
+                  Site
+                </Link>
+                <Link
+                  href="/admin"
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+                >
+                  <Settings className="w-3 h-3" />
+                  Admin
+                </Link>
+                <Link
+                  href="/dashboard"
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+                >
+                  <LayoutDashboard className="w-3 h-3" />
+                  Dashboard
+                </Link>
+              </nav>
             </div>
             {/* Desktop buttons - Simplified with auto-sync */}
             <div className="hidden md:flex items-center gap-2">

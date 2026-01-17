@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Calendar, MapPin, Music, Star, TrendingUp } from 'lucide-react';
 import { events, stats } from '@/data/portfolio';
@@ -8,6 +8,19 @@ import { events, stats } from '@/data/portfolio';
 export default function Portfolio() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
+
+  const toggleEventExpanded = (eventId: string) => {
+    setExpandedEvents(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(eventId)) {
+        newSet.delete(eventId);
+      } else {
+        newSet.add(eventId);
+      }
+      return newSet;
+    });
+  };
 
   return (
     <section id="portfolio" className="py-24 px-6" ref={ref}>
@@ -117,7 +130,7 @@ export default function Portfolio() {
                     {event.title}
                   </h4>
                   <div className="flex flex-wrap gap-1">
-                    {event.songs.slice(0, 3).map((song, j) => (
+                    {(expandedEvents.has(event.id) ? event.songs : event.songs.slice(0, 3)).map((song, j) => (
                       <span
                         key={j}
                         className="px-2 py-0.5 rounded-full bg-midnight-800 text-xs text-midnight-400"
@@ -126,9 +139,12 @@ export default function Portfolio() {
                       </span>
                     ))}
                     {event.songs.length > 3 && (
-                      <span className="px-2 py-0.5 text-xs text-midnight-500">
-                        +{event.songs.length - 3} more
-                      </span>
+                      <button
+                        onClick={() => toggleEventExpanded(event.id)}
+                        className="px-2 py-0.5 text-xs text-gold-400 hover:text-gold-300 transition-colors cursor-pointer"
+                      >
+                        {expandedEvents.has(event.id) ? 'show less' : `+${event.songs.length - 3} more`}
+                      </button>
                     )}
                   </div>
                 </div>

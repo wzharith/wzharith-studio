@@ -91,4 +91,5 @@ export const stats = {
   yearsActive: 2,
   signatureSong: "Can't Help Falling in Love",
   signatureSongPercentage: 71,
+  walkDownPercentage: 93,
 };

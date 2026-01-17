@@ -2,12 +2,21 @@
 
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Check, Sparkles, Clock, Music } from 'lucide-react';
+import { Check, Sparkles, Clock, Music, Loader2 } from 'lucide-react';
 import { siteConfig } from '@/config/site.config';
+import { useCloudConfig, isCloudConfigEnabled, getDefaultPackages, getDefaultAddons } from '@/lib/cloud-config';
 
 export default function Packages() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+
+  // Feature flag: use cloud config or static file
+  const useCloud = isCloudConfigEnabled();
+  const { packages: cloudPackages, addons: cloudAddons, isLoading } = useCloudConfig();
+
+  // Determine which data to use based on feature flag
+  const packages = useCloud ? cloudPackages : getDefaultPackages();
+  const addons = useCloud ? cloudAddons : getDefaultAddons();
 
   return (
     <section id="packages" className="py-24 px-6 relative" ref={ref}>
@@ -33,9 +42,17 @@ export default function Packages() {
           </p>
         </motion.div>
 
+        {/* Loading state (only shown when using cloud config) */}
+        {useCloud && isLoading && (
+          <div className="flex items-center justify-center py-12 mb-16">
+            <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
+            <span className="ml-3 text-midnight-400">Loading packages...</span>
+          </div>
+        )}
+
         {/* Packages Grid */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-          {siteConfig.packages.map((pkg, i) => (
+        <div className={`grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16 ${useCloud && isLoading ? 'hidden' : ''}`}>
+          {packages.map((pkg, i) => (
             <motion.div
               key={pkg.id}
               initial={{ opacity: 0, y: 30 }}
@@ -57,14 +74,14 @@ export default function Packages() {
                   {pkg.name}
                 </h3>
                 <div className="mb-2">
-                  <span className="font-display text-3xl font-bold gold-text">
-                    {pkg.priceDisplay}
-                  </span>
                   {pkg.priceNote && (
-                    <span className="text-midnight-500 text-sm ml-1">
+                    <span className="text-midnight-400 text-xs block mb-1">
                       {pkg.priceNote}
                     </span>
                   )}
+                  <span className="font-display text-3xl font-bold gold-text">
+                    {pkg.priceDisplay}
+                  </span>
                 </div>
                 <p className="font-body text-sm text-midnight-400">
                   {pkg.description}
@@ -117,7 +134,7 @@ export default function Packages() {
         </div>
 
         {/* Add-ons */}
-        {siteConfig.addons.length > 0 && (
+        {addons.length > 0 && !(useCloud && isLoading) && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={isInView ? { opacity: 1, y: 0 } : {}}
@@ -128,7 +145,7 @@ export default function Packages() {
               Add-On Services
             </h3>
             <div className="grid sm:grid-cols-2 gap-4">
-              {siteConfig.addons.map((addon, i) => (
+              {addons.map((addon, i) => (
                 <div
                   key={i}
                   className="flex items-center justify-between py-2 border-b border-midnight-700 last:border-0"

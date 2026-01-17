@@ -577,12 +577,19 @@ export interface SiteConfigData {
     name: string;
     description: string;
     price: number;
-    duration: string;
+    priceDisplay: string;
+    priceNote?: string;
+    features: string[];
+    popular?: boolean;
+    songs?: string;
+    duration?: string;
   }>;
   addons?: Array<{
     id: string;
     name: string;
     price: number;
+    priceDisplay: string;
+    description: string;
   }>;
   transport_baseCharge?: number;
   transport_perKmRate?: number;
@@ -653,6 +660,39 @@ export const saveConfigToGoogle = async (config: SiteConfigData): Promise<{ succ
     return { success: false, error: 'Failed to save config' };
   } catch (error) {
     console.error('[Config] Save error:', error);
+    return { success: false, error: String(error) };
+  }
+};
+
+/**
+ * Save notification subscriber phone to Google Sheets
+ */
+export const saveNotificationSubscriber = async (phone: string): Promise<{ success: boolean; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    console.log('[Subscriber] Google sync not configured, skipping');
+    return { success: false, error: 'Google sync not configured' };
+  }
+
+  try {
+    const params = new URLSearchParams({
+      action: 'saveSubscriber',
+      phone: phone,
+    });
+
+    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log('[Subscriber] Saved:', result);
+      return { success: result.success, error: result.error };
+    }
+
+    return { success: false, error: 'Failed to save subscriber' };
+  } catch (error) {
+    console.error('[Subscriber] Error:', error);
     return { success: false, error: String(error) };
   }
 };

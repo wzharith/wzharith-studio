@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home } from 'lucide-react';
 import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
@@ -9,6 +9,7 @@ import {
   saveConfigToGoogle,
   type SiteConfigData,
 } from '@/lib/google-sync';
+import { clearConfigCache } from '@/lib/cloud-config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import { siteConfig } from '@/config/site.config';
 
@@ -17,13 +18,20 @@ interface PackageItem {
   name: string;
   description: string;
   price: number;
-  duration: string;
+  priceDisplay: string;
+  priceNote?: string;
+  features: string[];
+  popular?: boolean;
+  songs?: string;
+  duration?: string;
 }
 
 interface AddonItem {
   id: string;
   name: string;
   price: number;
+  priceDisplay: string;
+  description: string;
 }
 
 export default function AdminSettings() {
@@ -102,6 +110,11 @@ export default function AdminSettings() {
       name: pkg.name,
       description: pkg.description,
       price: pkg.price,
+      priceDisplay: pkg.priceDisplay,
+      priceNote: pkg.priceNote || '',
+      features: pkg.features || [],
+      popular: pkg.popular || false,
+      songs: pkg.songs || '',
       duration: pkg.duration || '',
     }));
 
@@ -110,6 +123,8 @@ export default function AdminSettings() {
       id: String(idx + 1),
       name: addon.name,
       price: addon.price,
+      priceDisplay: addon.priceDisplay,
+      description: addon.description || '',
     }));
 
   const loadConfig = async () => {
@@ -122,16 +137,52 @@ export default function AdminSettings() {
 
     if (isGoogleSyncEnabled()) {
       const result = await fetchConfig();
-      if (result.success && Object.keys(result.config).length > 0) {
-        // Merge with defaults - cloud takes priority
-        setConfig({ ...defaultConfig, ...result.config });
-        setPackages(result.config.packages || defaultPackages);
-        setAddons(result.config.addons || defaultAddons);
-      } else {
-        // Google Sheets is empty or not configured - use defaults
+      const cloudIsEmpty = !result.success || Object.keys(result.config).length === 0;
+
+      if (cloudIsEmpty) {
+        // First use - push defaults to cloud automatically
+        console.log('[Admin] Cloud is empty, auto-pushing defaults...');
+        const fullDefaults = {
+          ...defaultConfig,
+          packages: defaultPackages,
+          addons: defaultAddons,
+        };
+
+        // Push to cloud in background
+        saveConfigToGoogle(fullDefaults).then(res => {
+          if (res.success) {
+            console.log('[Admin] Defaults synced to cloud successfully');
+          }
+        });
+
         setConfig(defaultConfig);
         setPackages(defaultPackages);
         setAddons(defaultAddons);
+      } else {
+        // Smart merge - only use cloud values that are non-empty
+        const mergedConfig: SiteConfigData = { ...defaultConfig };
+        Object.entries(result.config).forEach(([key, value]) => {
+          // Only override if value is not empty/null/undefined
+          if (value !== undefined && value !== null && value !== '' && key !== 'packages' && key !== 'addons') {
+            (mergedConfig as Record<string, unknown>)[key] = value;
+          }
+        });
+        setConfig(mergedConfig);
+
+        // Use cloud packages/addons only if they have items, otherwise use defaults
+        const cloudPackages = result.config.packages;
+        const cloudAddons = result.config.addons;
+
+        setPackages(
+          Array.isArray(cloudPackages) && cloudPackages.length > 0
+            ? cloudPackages
+            : defaultPackages
+        );
+        setAddons(
+          Array.isArray(cloudAddons) && cloudAddons.length > 0
+            ? cloudAddons
+            : defaultAddons
+        );
       }
     } else {
       // No Google sync - use defaults
@@ -158,6 +209,8 @@ export default function AdminSettings() {
 
     if (result.success) {
       setSaveMessage('Settings saved successfully!');
+      // Clear cache so invoice/other pages get fresh data
+      clearConfigCache();
     } else {
       setSaveMessage('Error: ' + (result.error || 'Failed to save'));
     }
@@ -172,19 +225,34 @@ export default function AdminSettings() {
 
   // Package management
   const addPackage = () => {
+    const newId = Date.now().toString();
     setPackages([...packages, {
-      id: Date.now().toString(),
+      id: newId,
       name: '',
       description: '',
       price: 0,
+      priceDisplay: 'RM 0',
+      priceNote: '',
+      features: [],
+      popular: false,
+      songs: '',
       duration: '1 hour',
     }]);
   };
 
-  const updatePackage = (id: string, field: keyof PackageItem, value: string | number) => {
-    setPackages(packages.map(pkg =>
-      pkg.id === id ? { ...pkg, [field]: value } : pkg
-    ));
+  const updatePackage = (id: string, field: keyof PackageItem, value: string | number | boolean | string[]) => {
+    setPackages(packages.map(pkg => {
+      if (pkg.id !== id) return pkg;
+
+      const updated = { ...pkg, [field]: value };
+
+      // Auto-update priceDisplay when price changes
+      if (field === 'price') {
+        updated.priceDisplay = `RM ${Number(value).toLocaleString()}`;
+      }
+
+      return updated;
+    }));
   };
 
   const removePackage = (id: string) => {
@@ -197,13 +265,24 @@ export default function AdminSettings() {
       id: Date.now().toString(),
       name: '',
       price: 0,
+      priceDisplay: 'RM 0',
+      description: '',
     }]);
   };
 
   const updateAddon = (id: string, field: keyof AddonItem, value: string | number) => {
-    setAddons(addons.map(addon =>
-      addon.id === id ? { ...addon, [field]: value } : addon
-    ));
+    setAddons(addons.map(addon => {
+      if (addon.id !== id) return addon;
+
+      const updated = { ...addon, [field]: value };
+
+      // Auto-update priceDisplay when price changes
+      if (field === 'price') {
+        updated.priceDisplay = `RM ${Number(value).toLocaleString()}`;
+      }
+
+      return updated;
+    }));
   };
 
   const removeAddon = (id: string) => {
@@ -220,6 +299,7 @@ export default function AdminSettings() {
     { id: 'addons', label: 'Add-ons', icon: DollarSign },
     { id: 'transport', label: 'Transport', icon: Truck },
     { id: 'terms', label: 'Terms', icon: FileText },
+    { id: 'sync', label: 'Sync', icon: RefreshCw },
   ];
 
   // Loading state
@@ -292,13 +372,34 @@ export default function AdminSettings() {
       <header className="bg-slate-900 text-white py-4 px-6 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link href="/" className="text-amber-400 hover:text-amber-300">
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
             <h1 className="text-xl font-semibold flex items-center gap-2">
               <Settings className="w-5 h-5 text-amber-400" />
               Admin Settings
             </h1>
+            {/* Navigation Links */}
+            <nav className="hidden sm:flex items-center gap-1 ml-4 border-l border-slate-700 pl-4">
+              <Link
+                href="/"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <Home className="w-3 h-3" />
+                Site
+              </Link>
+              <Link
+                href="/invoice"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <InvoiceIcon className="w-3 h-3" />
+                Invoice
+              </Link>
+              <Link
+                href="/dashboard"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+              >
+                <LayoutDashboard className="w-3 h-3" />
+                Dashboard
+              </Link>
+            </nav>
           </div>
           <div className="flex items-center gap-3">
             {!isGoogleSyncEnabled() && (
@@ -359,6 +460,16 @@ export default function AdminSettings() {
 
           {/* Content */}
           <div className="flex-1 bg-white rounded-xl shadow-sm p-6">
+            {/* Loading overlay */}
+            {isRefreshing && (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500"></div>
+                <span className="ml-3 text-slate-500">Loading configuration...</span>
+              </div>
+            )}
+
+            {!isRefreshing && (
+              <>
             {/* Business Section */}
             {activeSection === 'business' && (
               <div className="space-y-6">
@@ -540,12 +651,19 @@ export default function AdminSettings() {
                 </div>
                 <div className="space-y-4">
                   {packages.length === 0 ? (
-                    <p className="text-slate-500 text-center py-8">No packages yet. Click "Add Package" to create one.</p>
+                    <p className="text-slate-500 text-center py-8">No packages yet. Click &quot;Add Package&quot; to create one.</p>
                   ) : (
                     packages.map((pkg, index) => (
-                      <div key={pkg.id} className="border rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-sm font-medium text-slate-500">Package {index + 1}</span>
+                      <div key={pkg.id} className="border rounded-lg p-4 hover:border-amber-300 transition-colors">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-500">Package {index + 1}</span>
+                            {pkg.popular && (
+                              <span className="flex items-center gap-1 bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
+                                <Star className="w-3 h-3" /> Popular
+                              </span>
+                            )}
+                          </div>
                           <button
                             onClick={() => removePackage(pkg.id)}
                             className="text-red-400 hover:text-red-600"
@@ -554,36 +672,89 @@ export default function AdminSettings() {
                           </button>
                         </div>
                         <div className="grid gap-3">
+                          {/* Row 1: Name */}
                           <input
                             type="text"
                             value={pkg.name}
                             onChange={(e) => updatePackage(pkg.id, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg"
-                            placeholder="Package Name"
+                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                            placeholder="Package Name (e.g., Full Package)"
                           />
-                          <input
-                            type="text"
+
+                          {/* Row 2: Description */}
+                          <textarea
                             value={pkg.description}
                             onChange={(e) => updatePackage(pkg.id, 'description', e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg"
-                            placeholder="Description"
+                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 h-16"
+                            placeholder="Short description..."
                           />
-                          <div className="grid grid-cols-2 gap-3">
-                            <input
-                              type="number"
-                              value={pkg.price}
-                              onChange={(e) => updatePackage(pkg.id, 'price', Number(e.target.value))}
-                              className="w-full px-3 py-2 border rounded-lg"
-                              placeholder="Price (RM)"
-                            />
+
+                          {/* Row 3: Price, Duration, Songs */}
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Price (RM)</label>
+                              <input
+                                type="number"
+                                value={pkg.price}
+                                onChange={(e) => updatePackage(pkg.id, 'price', Number(e.target.value))}
+                                className="w-full px-3 py-2 border rounded-lg"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Duration</label>
+                              <input
+                                type="text"
+                                value={pkg.duration || ''}
+                                onChange={(e) => updatePackage(pkg.id, 'duration', e.target.value)}
+                                className="w-full px-3 py-2 border rounded-lg"
+                                placeholder="e.g., 1-1.5 hours"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Songs</label>
+                              <input
+                                type="text"
+                                value={pkg.songs || ''}
+                                onChange={(e) => updatePackage(pkg.id, 'songs', e.target.value)}
+                                className="w-full px-3 py-2 border rounded-lg"
+                                placeholder="e.g., 5-6 songs"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Row 4: Price Note */}
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-1">Price Note (optional)</label>
                             <input
                               type="text"
-                              value={pkg.duration}
-                              onChange={(e) => updatePackage(pkg.id, 'duration', e.target.value)}
+                              value={pkg.priceNote || ''}
+                              onChange={(e) => updatePackage(pkg.id, 'priceNote', e.target.value)}
                               className="w-full px-3 py-2 border rounded-lg"
-                              placeholder="Duration"
+                              placeholder="e.g., starting from"
                             />
                           </div>
+
+                          {/* Row 5: Features */}
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-1">Features (comma-separated)</label>
+                            <textarea
+                              value={(pkg.features || []).join(', ')}
+                              onChange={(e) => updatePackage(pkg.id, 'features', e.target.value.split(',').map(f => f.trim()).filter(Boolean))}
+                              className="w-full px-3 py-2 border rounded-lg h-16"
+                              placeholder="e.g., Entrance performance, Cake cutting, Background music"
+                            />
+                          </div>
+
+                          {/* Row 6: Popular Toggle */}
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={pkg.popular || false}
+                              onChange={(e) => updatePackage(pkg.id, 'popular', e.target.checked)}
+                              className="w-4 h-4 text-amber-500 rounded focus:ring-amber-500"
+                            />
+                            <span className="text-sm text-slate-600">Mark as Popular (highlighted on website)</span>
+                          </label>
                         </div>
                       </div>
                     ))
@@ -607,32 +778,53 @@ export default function AdminSettings() {
                 </div>
                 <div className="space-y-3">
                   {addons.length === 0 ? (
-                    <p className="text-slate-500 text-center py-8">No add-ons yet. Click "Add Item" to create one.</p>
+                    <p className="text-slate-500 text-center py-8">No add-ons yet. Click &quot;Add Item&quot; to create one.</p>
                   ) : (
                     addons.map((addon) => (
-                      <div key={addon.id} className="flex items-center gap-3 border rounded-lg p-3">
-                        <input
-                          type="text"
-                          value={addon.name}
-                          onChange={(e) => updateAddon(addon.id, 'name', e.target.value)}
-                          className="flex-1 px-3 py-2 border rounded-lg"
-                          placeholder="Add-on Name"
-                        />
-                        <div className="w-32">
-                          <input
-                            type="number"
-                            value={addon.price}
-                            onChange={(e) => updateAddon(addon.id, 'price', Number(e.target.value))}
-                            className="w-full px-3 py-2 border rounded-lg"
-                            placeholder="Price"
-                          />
+                      <div key={addon.id} className="border rounded-lg p-4 hover:border-amber-300 transition-colors">
+                        <div className="flex items-start gap-4">
+                          <div className="flex-1 grid gap-3">
+                            {/* Row 1: Name and Price */}
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="col-span-2">
+                                <label className="block text-xs text-slate-500 mb-1">Name</label>
+                                <input
+                                  type="text"
+                                  value={addon.name}
+                                  onChange={(e) => updateAddon(addon.id, 'name', e.target.value)}
+                                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                  placeholder="e.g., Custom Song Request"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-slate-500 mb-1">Price (RM)</label>
+                                <input
+                                  type="number"
+                                  value={addon.price}
+                                  onChange={(e) => updateAddon(addon.id, 'price', Number(e.target.value))}
+                                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                />
+                              </div>
+                            </div>
+                            {/* Row 2: Description */}
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Description</label>
+                              <input
+                                type="text"
+                                value={addon.description}
+                                onChange={(e) => updateAddon(addon.id, 'description', e.target.value)}
+                                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                placeholder="Brief description of this add-on..."
+                              />
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeAddon(addon.id)}
+                            className="text-red-400 hover:text-red-600 p-2 mt-6"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
-                        <button
-                          onClick={() => removeAddon(addon.id)}
-                          className="text-red-400 hover:text-red-600 p-2"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </div>
                     ))
                   )}
@@ -725,6 +917,83 @@ export default function AdminSettings() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Sync Section */}
+            {activeSection === 'sync' && (
+              <div className="space-y-6">
+                <h2 className="text-lg font-semibold text-slate-800">Configuration Sync</h2>
+                <p className="text-sm text-slate-500">
+                  Sync configuration between Google Sheets and your static site files.
+                </p>
+
+                {/* Current Status */}
+                <div className="bg-slate-50 rounded-lg p-4 border">
+                  <h3 className="font-medium text-slate-700 mb-2">Current Data Flow</h3>
+                  <div className="space-y-2 text-sm text-slate-600">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                      <span><strong>Admin & Invoice:</strong> Read/Write from Google Sheets (cloud)</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 bg-amber-500 rounded-full"></span>
+                      <span><strong>Main Site:</strong> Uses site.config.ts (static, fast)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Push to Cloud */}
+                <div className="bg-white rounded-lg p-4 border">
+                  <h3 className="font-medium text-slate-700 mb-2">Push to Cloud</h3>
+                  <p className="text-sm text-slate-500 mb-3">
+                    Changes you make in this admin panel are automatically saved to Google Sheets when you click &quot;Save Changes&quot;.
+                  </p>
+                  <div className="flex items-center gap-2 text-sm text-emerald-600">
+                    <span className="w-4 h-4">✓</span>
+                    <span>Auto-enabled on save</span>
+                  </div>
+                </div>
+
+                {/* Pull from Cloud */}
+                <div className="bg-white rounded-lg p-4 border">
+                  <h3 className="font-medium text-slate-700 mb-2">Pull from Cloud to site.config.ts</h3>
+                  <p className="text-sm text-slate-500 mb-3">
+                    To update your static site with the latest cloud config, run this command in your terminal:
+                  </p>
+                  <div className="bg-slate-900 text-emerald-400 px-4 py-3 rounded-lg font-mono text-sm flex items-center justify-between">
+                    <code>npm run sync:pull</code>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText('npm run sync:pull');
+                        setSaveMessage('Command copied!');
+                        setTimeout(() => setSaveMessage(''), 2000);
+                      }}
+                      className="text-slate-400 hover:text-white text-xs px-2 py-1 bg-slate-800 rounded"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2">
+                    Then run <code className="bg-slate-100 px-1 rounded">npm run build</code> and deploy to update your public site.
+                  </p>
+                </div>
+
+                {/* Feature Flag Info */}
+                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <h3 className="font-medium text-blue-800 mb-2">Feature Flag (Advanced)</h3>
+                  <p className="text-sm text-blue-700 mb-2">
+                    Want the main site to load packages from cloud instead of static file?
+                  </p>
+                  <p className="text-sm text-blue-600">
+                    Set <code className="bg-blue-100 px-1 rounded">NEXT_PUBLIC_USE_CLOUD_CONFIG=true</code> in your environment.
+                  </p>
+                  <p className="text-xs text-blue-500 mt-2">
+                    Note: Cloud loading may add ~1-2s delay on first page load.
+                  </p>
+                </div>
+              </div>
+            )}
+              </>
             )}
           </div>
         </div>

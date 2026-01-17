@@ -173,8 +173,8 @@ export const siteConfig: SiteConfig = {
     {
       id: "entrance",
       name: "Entrance Only",
-      price: 400,
-      priceDisplay: "RM 400",
+      price: 499,
+      priceDisplay: "RM 499",
       priceNote: "starting from",
       description: "Perfect for couples who want a grand entrance with live saxophone.",
       features: [
@@ -189,8 +189,8 @@ export const siteConfig: SiteConfig = {
     {
       id: "classic",
       name: "Entrance + Cake",
-      price: 600,
-      priceDisplay: "RM 600",
+      price: 696,
+      priceDisplay: "RM 696",
       priceNote: "starting from",
       description: "The most popular package for intimate weddings.",
       features: [
@@ -206,8 +206,8 @@ export const siteConfig: SiteConfig = {
     {
       id: "full",
       name: "Full Package",
-      price: 1000,
-      priceDisplay: "RM 1,000",
+      price: 1096,
+      priceDisplay: "RM 1,096",
       priceNote: "starting from",
       description: "Complete saxophone experience for your special day.",
       features: [
@@ -222,8 +222,8 @@ export const siteConfig: SiteConfig = {
     {
       id: "premium",
       name: "Premium Experience",
-      price: 1800,
-      priceDisplay: "RM 1,800",
+      price: 1899,
+      priceDisplay: "RM 1,899",
       priceNote: "starting from",
       description: "The ultimate live music experience with collaboration options.",
       features: [
@@ -248,15 +248,9 @@ export const siteConfig: SiteConfig = {
     },
     {
       name: "Additional Song",
-      price: 50,
-      priceDisplay: "RM 50",
+      price: 80,
+      priceDisplay: "RM 80",
       description: "Extra song beyond package",
-    },
-    {
-      name: "Second Location",
-      price: 300,
-      priceDisplay: "RM 300",
-      description: "Same day, different venue",
     },
     {
       name: "Extended Performance",

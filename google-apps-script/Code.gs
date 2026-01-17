@@ -35,6 +35,7 @@ const SHEETS = {
   INQUIRIES: 'Inquiries',
   EVENTS: 'Events',
   CONFIG: 'Config',
+  SUBSCRIBERS: 'Subscribers',
 };
 
 // =============================================================================
@@ -87,8 +88,11 @@ function doGet(e) {
         const configData = JSON.parse(e.parameter.data);
         result = saveConfig(configData);
         break;
+      case 'saveSubscriber':
+        result = saveSubscriber(e.parameter.phone);
+        break;
       default:
-        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig'] };
+        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig', 'saveSubscriber'] };
     }
 
     return ContentService
@@ -916,6 +920,42 @@ function toCamelCase(str) {
   return str
     .toLowerCase()
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, chr) => chr.toUpperCase());
+}
+
+// =============================================================================
+// SUBSCRIBER FUNCTIONS
+// =============================================================================
+
+/**
+ * Save notification subscriber phone number
+ */
+function saveSubscriber(phone) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sheet = ss.getSheetByName(SHEETS.SUBSCRIBERS);
+
+  // Create sheet if it doesn't exist
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEETS.SUBSCRIBERS);
+    sheet.appendRow(['Phone', 'Created At', 'Source']);
+    sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
+  }
+
+  // Check for duplicate
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === phone) {
+      return { success: true, message: 'Already subscribed' };
+    }
+  }
+
+  // Add new subscriber
+  sheet.appendRow([
+    phone,
+    new Date().toISOString(),
+    'Website - Digital Products'
+  ]);
+
+  return { success: true, message: 'Subscribed successfully' };
 }
 
 // =============================================================================

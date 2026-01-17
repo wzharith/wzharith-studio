@@ -1,8 +1,9 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Music, FileMusic, Headphones, BookOpen, Download, ArrowRight } from 'lucide-react';
+import { Music, FileMusic, Headphones, BookOpen, Download, ArrowRight, CheckCircle, Phone } from 'lucide-react';
+import { saveNotificationSubscriber, isGoogleSyncEnabled } from '@/lib/google-sync';
 
 const products = [
   {
@@ -38,6 +39,27 @@ const products = [
 export default function DigitalProducts() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+  const [phone, setPhone] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!phone.trim()) return;
+
+    setIsSubmitting(true);
+    try {
+      if (isGoogleSyncEnabled()) {
+        await saveNotificationSubscriber(phone.trim());
+      }
+      setIsSubmitted(true);
+      setPhone('');
+    } catch (error) {
+      console.error('Failed to save subscriber:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <section id="products" className="py-24 px-6" ref={ref}>
@@ -113,20 +135,34 @@ export default function DigitalProducts() {
             content becomes available.
           </p>
 
-          <form className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
-            <input
-              type="email"
-              placeholder="your@email.com"
-              className="flex-1 px-4 py-3 rounded-full bg-midnight-800/50 border border-midnight-700 text-white placeholder-midnight-400 focus:outline-none focus:border-gold-500 transition-colors"
-            />
-            <button
-              type="submit"
-              className="px-6 py-3 bg-gold-500 text-midnight-950 font-sans font-medium rounded-full hover:bg-gold-400 transition-all flex items-center justify-center gap-2"
-            >
-              Notify Me
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
+          {isSubmitted ? (
+            <div className="flex items-center justify-center gap-2 text-gold-400">
+              <CheckCircle className="w-5 h-5" />
+              <span className="font-sans">Thank you! We&apos;ll notify you when products launch.</span>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+              <div className="flex-1 relative">
+                <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-midnight-400" />
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+60 12-345 6789"
+                  className="w-full pl-10 pr-4 py-3 rounded-full bg-midnight-800/50 border border-midnight-700 text-white placeholder-midnight-400 focus:outline-none focus:border-gold-500 transition-colors"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="px-6 py-3 bg-gold-500 text-midnight-950 font-sans font-medium rounded-full hover:bg-gold-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isSubmitting ? 'Saving...' : 'Notify Me'}
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+          )}
         </motion.div>
       </div>
     </section>

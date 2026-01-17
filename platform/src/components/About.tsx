@@ -12,7 +12,7 @@ const features = [
   {
     icon: Music2,
     title: 'Professional Sound',
-    description: 'High-quality wireless saxophone system with portable speaker for crystal clear audio.',
+    description: 'High-quality wireless microphone system designed to fill large halls with crystal clear audio.',
   },
   {
     icon: Heart,
@@ -27,7 +27,7 @@ const features = [
   {
     icon: Users,
     title: 'Collaboration Ready',
-    description: 'Available for duo performances with vocalists and other musicians.',
+    description: 'Available for duo performances with pianist and other musicians.',
   },
 ];
 
@@ -72,9 +72,9 @@ export default function About() {
             {/* Floating badge */}
             <div className="absolute -top-4 -right-4 glass rounded-xl px-6 py-4">
               <div className="text-center">
-                <div className="font-display text-2xl font-bold gold-text">71%</div>
+                <div className="font-display text-2xl font-bold gold-text">93%</div>
                 <div className="font-sans text-xs text-midnight-400">
-                  play Elvis at every wedding
+                  walk down together with bride & groom
                 </div>
               </div>
             </div>
@@ -104,7 +104,7 @@ export default function About() {
                 With over 30 weddings performed, I specialize in entrance performances,
                 cake cutting ceremonies, and meal accompaniment. My repertoire spans from
                 timeless classics like Elvis&apos;s &ldquo;Can&apos;t Help Falling in Love&rdquo; to modern
-                hits and beloved Malay romantic songs.
+                hits, beloved Malay romantic songs, and religious tracks like Selawat Badar.
               </p>
             </div>
 

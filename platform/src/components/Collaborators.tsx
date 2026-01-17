@@ -2,7 +2,7 @@
 
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Users, Mic2, Guitar, Piano, Users2 } from 'lucide-react';
+import { Users, Mic2, Guitar, Piano, Users2, Music } from 'lucide-react';
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 
 const collaborationTypes = [
@@ -10,25 +10,29 @@ const collaborationTypes = [
     icon: Mic2,
     title: 'Vocalists',
     description: 'Duo performances with talented singers for a fuller sound experience.',
-    available: true,
+    available: false,
+    note: undefined,
   },
   {
     icon: Guitar,
     title: 'Guitarists',
     description: 'Acoustic guitar accompaniment for intimate and warm performances.',
-    available: true,
+    available: false,
+    note: undefined,
   },
   {
     icon: Piano,
     title: 'Pianists',
     description: 'Classic piano and saxophone combination for elegant events.',
-    available: false,
+    available: true,
+    note: '2 talents available',
   },
   {
-    icon: Users,
-    title: 'Full Band',
-    description: 'Complete acoustic band setup for premium events.',
-    available: false,
+    icon: Music,
+    title: 'Saxophone Duet',
+    description: 'Double the saxophone power for a truly memorable performance.',
+    available: true,
+    note: undefined,
   },
 ];
 
@@ -86,6 +90,11 @@ export default function Collaborators() {
               <p className="font-body text-sm text-midnight-400">
                 {type.description}
               </p>
+              {type.note && (
+                <p className="font-sans text-xs text-gold-400 mt-2">
+                  {type.note}
+                </p>
+              )}
             </motion.div>
           ))}
         </div>

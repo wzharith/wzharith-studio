@@ -1,9 +1,16 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { useForm } from 'react-hook-form';
-import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle, CalendarCheck } from 'lucide-react';
+import { Calendar, Clock, MapPin, Music, CheckCircle, MessageCircle, CalendarCheck, Instagram } from 'lucide-react';
+
+// TikTok icon component (not available in Lucide)
+const TikTokIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/>
+  </svg>
+);
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 import AvailabilityCalendar from './AvailabilityCalendar';
 import { saveBookingInquiry, isGoogleSyncEnabled } from '@/lib/google-sync';
@@ -20,10 +27,24 @@ interface BookingFormData {
   message: string;
 }
 
+// Get next Saturday from today
+const getNextSaturday = (): string => {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  const daysUntilSaturday = dayOfWeek === 6 ? 7 : (6 - dayOfWeek);
+  const nextSaturday = new Date(today);
+  nextSaturday.setDate(today.getDate() + daysUntilSaturday);
+  return nextSaturday.toISOString().split('T')[0];
+};
+
 export default function BookingForm() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<string>('');
+  const defaultDate = useMemo(() => getNextSaturday(), []);
+  const [selectedDate, setSelectedDate] = useState<string>(defaultDate);
+  const [selectedHour, setSelectedHour] = useState<string>('12');
+  const [selectedMinute, setSelectedMinute] = useState<string>('00');
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('PM');
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
 
@@ -41,13 +62,17 @@ export default function BookingForm() {
 
   const selectedPackage = watch('packageId');
 
-  // Helper to format 24h time to 12h AM/PM format
-  const formatTimeToAMPM = (time24: string): string => {
-    if (!time24) return '';
-    const [hours, minutes] = time24.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const hour12 = hours % 12 || 12;
-    return `${hour12}:${minutes.toString().padStart(2, '0')} ${period}`;
+  // Helper to format time parts to AM/PM format
+  const formatTimeToAMPM = (): string => {
+    return `${selectedHour}:${selectedMinute} ${selectedPeriod}`;
+  };
+
+  // Convert time parts to 24h format for form submission
+  const getTime24 = (): string => {
+    let hour24 = parseInt(selectedHour);
+    if (selectedPeriod === 'PM' && hour24 !== 12) hour24 += 12;
+    if (selectedPeriod === 'AM' && hour24 === 12) hour24 = 0;
+    return `${hour24.toString().padStart(2, '0')}:${selectedMinute}`;
   };
 
   // Helper to format date to readable format
@@ -65,7 +90,7 @@ export default function BookingForm() {
   const onSubmit = async (data: BookingFormData) => {
     const pkg = siteConfig.packages.find((p) => p.id === data.packageId);
     const eventDateToUse = data.eventDate || selectedDate;
-    const formattedTime = formatTimeToAMPM(data.eventTime);
+    const formattedTime = formatTimeToAMPM();
     const formattedDate = formatDate(eventDateToUse);
 
     // Format WhatsApp message - no emojis for compatibility
@@ -285,10 +310,38 @@ ${data.message || 'None'}
                       <Clock className="inline w-3 h-3 mr-1" />
                       Event Time *
                     </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedHour}
+                        onChange={(e) => setSelectedHour(e.target.value)}
+                        className="flex-1 px-3 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      >
+                        {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((h) => (
+                          <option key={h} value={h.toString()}>{h}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={selectedMinute}
+                        onChange={(e) => setSelectedMinute(e.target.value)}
+                        className="w-16 px-2 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      >
+                        <option value="00">00</option>
+                        <option value="30">30</option>
+                      </select>
+                      <select
+                        value={selectedPeriod}
+                        onChange={(e) => setSelectedPeriod(e.target.value)}
+                        className="w-16 px-2 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      >
+                        <option value="AM">AM</option>
+                        <option value="PM">PM</option>
+                      </select>
+                    </div>
+                    {/* Hidden input for form validation */}
                     <input
-                      {...register('eventTime', { required: 'Time is required' })}
-                      type="time"
-                      className="w-full px-4 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      type="hidden"
+                      {...register('eventTime')}
+                      value={getTime24()}
                     />
                   </div>
                 </div>
@@ -401,7 +454,8 @@ ${data.message || 'None'}
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
               >
-                IG: @{siteConfig.social.instagram}
+                <Instagram className="w-4 h-4" />
+                @{siteConfig.social.instagram}
               </a>
             )}
             {siteConfig.social.tiktok && (
@@ -411,7 +465,8 @@ ${data.message || 'None'}
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
               >
-                TikTok: @{siteConfig.social.tiktok}
+                <TikTokIcon className="w-4 h-4" />
+                @{siteConfig.social.tiktok}
               </a>
             )}
           </div>
