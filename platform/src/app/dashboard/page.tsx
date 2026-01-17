@@ -32,7 +32,7 @@ import {
   type CalendarEventInfo,
   getCalendarEvents,
 } from '@/lib/google-sync';
-import { RevenueChart, StatusPieChart, BookingsChart } from '@/components/DashboardCharts';
+import { RevenueChart, StatusPieChart, PackagePieChart, ConversionFunnelChart } from '@/components/DashboardCharts';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 
 export default function Dashboard() {
@@ -52,6 +52,28 @@ export default function Dashboard() {
   // Calendar state
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Year selector state
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [compareYear, setCompareYear] = useState<number | null>(null);
+
+  // Available years from data
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    invoices.forEach(inv => {
+      if (inv.eventDate) {
+        const year = new Date(inv.eventDate).getFullYear();
+        years.add(year);
+      }
+      if (inv.createdAt) {
+        const year = new Date(inv.createdAt).getFullYear();
+        years.add(year);
+      }
+    });
+    // Ensure current year is always available
+    years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [invoices]);
 
   // Check authentication (shared auth)
   useEffect(() => {
@@ -119,25 +141,43 @@ export default function Dashboard() {
     [invoices]
   );
 
-  // Calculate stats including YTD
+  // Filter invoices by year
+  const yearFilteredInvoices = useMemo(() =>
+    activeInvoices.filter(inv => {
+      const eventDate = inv.eventDate ? new Date(inv.eventDate) : new Date(inv.createdAt);
+      return eventDate.getFullYear() === selectedYear;
+    }),
+    [activeInvoices, selectedYear]
+  );
+
+  // Get comparison year invoices
+  const compareYearInvoices = useMemo(() => {
+    if (!compareYear) return [];
+    return activeInvoices.filter(inv => {
+      const eventDate = inv.eventDate ? new Date(inv.eventDate) : new Date(inv.createdAt);
+      return eventDate.getFullYear() === compareYear;
+    });
+  }, [activeInvoices, compareYear]);
+
+  // Calculate stats for selected year
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
-    const paid = activeInvoices.filter(inv => inv.status === 'paid');
-    const pending = activeInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
-    const quotations = activeInvoices.filter(inv => inv.documentType === 'quotation');
-    const invoicesDocs = activeInvoices.filter(inv => inv.documentType === 'invoice');
+    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid');
+    const pending = yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
+    const quotations = yearFilteredInvoices.filter(inv => inv.documentType === 'quotation');
+    const invoicesDocs = yearFilteredInvoices.filter(inv => inv.documentType === 'invoice');
 
-    // YTD: Events completed (past dates with paid status)
+    // Completed events (past dates with paid status)
     const completedEvents = paid.filter(inv => {
       if (!inv.eventDate) return false;
       return inv.eventDate < todayStr;
     });
 
     // Upcoming: Events with future dates (any status except cancelled)
-    const upcomingEvents = activeInvoices.filter(inv => {
+    const upcomingEvents = yearFilteredInvoices.filter(inv => {
       if (!inv.eventDate || inv.status === 'cancelled') return false;
       return inv.eventDate >= todayStr;
     });
@@ -153,6 +193,7 @@ export default function Dashboard() {
 
     const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
     const pendingAmount = pending.reduce((sum, inv) => sum + inv.total, 0);
+    const avgInvoiceValue = paid.length > 0 ? Math.round(totalRevenue / paid.length) : 0;
     const conversionRate = quotations.length > 0
       ? (invoicesDocs.length / quotations.length * 100).toFixed(0)
       : 0;
@@ -160,7 +201,8 @@ export default function Dashboard() {
     return {
       totalRevenue,
       pendingAmount,
-      totalBookings: activeInvoices.length,
+      avgInvoiceValue,
+      totalBookings: yearFilteredInvoices.length,
       paidCount: paid.length,
       pendingCount: pending.length,
       conversionRate,
@@ -168,45 +210,78 @@ export default function Dashboard() {
       upcomingEvents: upcomingEvents.length,
       thisMonthEvents: thisMonthEvents.length,
     };
-  }, [activeInvoices]);
+  }, [yearFilteredInvoices, activeInvoices]);
 
-  // Monthly revenue data for charts
+  // Calculate comparison year stats
+  const compareStats = useMemo(() => {
+    if (!compareYear || compareYearInvoices.length === 0) return null;
+
+    const paid = compareYearInvoices.filter(inv => inv.status === 'paid');
+    const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
+    const avgInvoiceValue = paid.length > 0 ? Math.round(totalRevenue / paid.length) : 0;
+
+    return {
+      totalRevenue,
+      totalBookings: compareYearInvoices.length,
+      paidCount: paid.length,
+      avgInvoiceValue,
+    };
+  }, [compareYear, compareYearInvoices]);
+
+  // Calculate YoY growth
+  const yoyGrowth = useMemo(() => {
+    if (!compareStats || compareStats.totalRevenue === 0) return null;
+    const revenueGrowth = ((stats.totalRevenue - compareStats.totalRevenue) / compareStats.totalRevenue * 100).toFixed(0);
+    const bookingsGrowth = compareStats.totalBookings > 0
+      ? ((stats.totalBookings - compareStats.totalBookings) / compareStats.totalBookings * 100).toFixed(0)
+      : '0';
+    return {
+      revenue: Number(revenueGrowth),
+      bookings: Number(bookingsGrowth),
+    };
+  }, [stats, compareStats]);
+
+  // Monthly revenue data for charts (full year for selected year)
   const monthlyData = useMemo(() => {
-    const months: { [key: string]: { revenue: number; count: number } } = {};
-    const now = new Date();
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const data: { month: string; revenue: number; count: number; compareRevenue?: number; compareCount?: number }[] = [];
 
-    // Initialize last 6 months
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = d.toLocaleDateString('en-US', { month: 'short' });
-      months[key] = { revenue: 0, count: 0 };
-    }
+    // Initialize all 12 months
+    monthNames.forEach(month => {
+      data.push({ month, revenue: 0, count: 0, compareRevenue: 0, compareCount: 0 });
+    });
 
-    // Aggregate data
-    activeInvoices
+    // Aggregate selected year data
+    yearFilteredInvoices
       .filter(inv => inv.status === 'paid')
       .forEach(inv => {
         const date = new Date(inv.eventDate || inv.createdAt);
-        const key = date.toLocaleDateString('en-US', { month: 'short' });
-        if (months[key]) {
-          months[key].revenue += inv.total;
-          months[key].count += 1;
-        }
+        const monthIndex = date.getMonth();
+        data[monthIndex].revenue += inv.total;
+        data[monthIndex].count += 1;
       });
 
-    return Object.entries(months).map(([month, data]) => ({
-      month,
-      revenue: data.revenue,
-      count: data.count,
-    }));
-  }, [activeInvoices]);
+    // Aggregate comparison year data
+    if (compareYear) {
+      compareYearInvoices
+        .filter(inv => inv.status === 'paid')
+        .forEach(inv => {
+          const date = new Date(inv.eventDate || inv.createdAt);
+          const monthIndex = date.getMonth();
+          data[monthIndex].compareRevenue = (data[monthIndex].compareRevenue || 0) + inv.total;
+          data[monthIndex].compareCount = (data[monthIndex].compareCount || 0) + 1;
+        });
+    }
+
+    return data;
+  }, [yearFilteredInvoices, compareYearInvoices, compareYear]);
 
   // Status breakdown for pie chart
   const statusData = useMemo(() => {
-    const draft = activeInvoices.filter(inv => inv.status === 'draft').length;
-    const sent = activeInvoices.filter(inv => inv.status === 'sent').length;
-    const paid = activeInvoices.filter(inv => inv.status === 'paid').length;
-    const cancelled = activeInvoices.filter(inv => inv.status === 'cancelled').length;
+    const draft = yearFilteredInvoices.filter(inv => inv.status === 'draft').length;
+    const sent = yearFilteredInvoices.filter(inv => inv.status === 'sent').length;
+    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid').length;
+    const cancelled = yearFilteredInvoices.filter(inv => inv.status === 'cancelled').length;
 
     return [
       { name: 'Draft', value: draft, color: '#94a3b8' },
@@ -214,7 +289,70 @@ export default function Dashboard() {
       { name: 'Paid', value: paid, color: '#10b981' },
       { name: 'Cancelled', value: cancelled, color: '#ef4444' },
     ].filter(item => item.value > 0);
-  }, [activeInvoices]);
+  }, [yearFilteredInvoices]);
+
+  // Package performance analytics
+  const packageData = useMemo(() => {
+    const packageMap: { [key: string]: { count: number; revenue: number } } = {};
+    const colors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899'];
+
+    yearFilteredInvoices
+      .filter(inv => inv.status === 'paid')
+      .forEach(inv => {
+        // Extract package name from items
+        const packageItem = inv.items?.find(item =>
+          item.description?.toLowerCase().includes('package') ||
+          item.description?.toLowerCase().includes('entrance') ||
+          item.description?.toLowerCase().includes('performance')
+        );
+
+        let packageName = 'Other';
+        if (packageItem) {
+          // Try to extract package type (A, B, C, Full, etc.)
+          const desc = packageItem.description || '';
+          if (desc.toLowerCase().includes('full') || desc.toLowerCase().includes('package c')) {
+            packageName = 'Full Package';
+          } else if (desc.toLowerCase().includes('package b') || desc.toLowerCase().includes('cake')) {
+            packageName = 'Pkg B (Cake)';
+          } else if (desc.toLowerCase().includes('package a') || desc.toLowerCase().includes('entrance')) {
+            packageName = 'Pkg A (Entrance)';
+          } else {
+            packageName = desc.substring(0, 20);
+          }
+        }
+
+        if (!packageMap[packageName]) {
+          packageMap[packageName] = { count: 0, revenue: 0 };
+        }
+        packageMap[packageName].count += 1;
+        packageMap[packageName].revenue += inv.total;
+      });
+
+    return Object.entries(packageMap)
+      .map(([name, data], index) => ({
+        name,
+        count: data.count,
+        revenue: data.revenue,
+        avgValue: data.count > 0 ? Math.round(data.revenue / data.count) : 0,
+        color: colors[index % colors.length],
+      }))
+      .sort((a, b) => b.count - a.count);
+  }, [yearFilteredInvoices]);
+
+  // Conversion funnel data
+  const conversionData = useMemo(() => {
+    const quotations = yearFilteredInvoices.filter(inv => inv.documentType === 'quotation').length;
+    const invoicesDocs = yearFilteredInvoices.filter(inv => inv.documentType === 'invoice').length;
+    const sent = yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'paid').length;
+    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid').length;
+
+    return [
+      { stage: 'Quotations', count: quotations, color: '#94a3b8' },
+      { stage: 'Invoices', count: invoicesDocs, color: '#f59e0b' },
+      { stage: 'Sent/Confirmed', count: sent, color: '#3b82f6' },
+      { stage: 'Paid', count: paid, color: '#10b981' },
+    ];
+  }, [yearFilteredInvoices]);
 
   // Calendar events - combine invoice dates with Google Calendar events
   const calendarEventsMap = useMemo(() => {
@@ -436,6 +574,49 @@ export default function Dashboard() {
       </header>
 
       <div className="max-w-7xl mx-auto py-6 px-4">
+        {/* Year Selector */}
+        <div className="bg-white rounded-xl p-4 shadow-sm mb-6">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-slate-700">Year:</label>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="px-3 py-2 border rounded-lg bg-white text-slate-800 font-medium"
+              >
+                {availableYears.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-slate-700">Compare with:</label>
+              <select
+                value={compareYear || ''}
+                onChange={(e) => setCompareYear(e.target.value ? Number(e.target.value) : null)}
+                className="px-3 py-2 border rounded-lg bg-white text-slate-600"
+              >
+                <option value="">None</option>
+                {availableYears.filter(y => y !== selectedYear).map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            {yoyGrowth && (
+              <div className="flex items-center gap-4 ml-auto">
+                <div className={`flex items-center gap-1 text-sm font-medium ${yoyGrowth.revenue >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  <TrendingUp className={`w-4 h-4 ${yoyGrowth.revenue < 0 ? 'rotate-180' : ''}`} />
+                  {yoyGrowth.revenue >= 0 ? '+' : ''}{yoyGrowth.revenue}% Revenue
+                </div>
+                <div className={`flex items-center gap-1 text-sm font-medium ${yoyGrowth.bookings >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  <TrendingUp className={`w-4 h-4 ${yoyGrowth.bookings < 0 ? 'rotate-180' : ''}`} />
+                  {yoyGrowth.bookings >= 0 ? '+' : ''}{yoyGrowth.bookings}% Bookings
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Stats Cards - Row 1: Revenue & Pending */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
           <div className="bg-white rounded-xl p-4 shadow-sm">
@@ -514,16 +695,27 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Charts Row */}
+        {/* Charts Row 1 */}
         <div className="grid md:grid-cols-3 gap-6 mb-6">
           {/* Revenue Chart */}
           <div className="md:col-span-2 bg-white rounded-xl p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-800 mb-4">Revenue (Last 6 Months)</h2>
-            {monthlyData.some(d => d.revenue > 0) ? (
-              <RevenueChart data={monthlyData} />
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-slate-800">
+                Revenue {selectedYear}
+                {compareYear && <span className="text-slate-400 text-sm font-normal ml-2">vs {compareYear}</span>}
+              </h2>
+              {compareYear && (
+                <div className="flex items-center gap-4 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-500 rounded"></span> {selectedYear}</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-slate-300 rounded"></span> {compareYear}</span>
+                </div>
+              )}
+            </div>
+            {monthlyData.some(d => d.revenue > 0 || (d.compareRevenue && d.compareRevenue > 0)) ? (
+              <RevenueChart data={monthlyData} showComparison={!!compareYear} />
             ) : (
               <div className="h-80 flex items-center justify-center text-slate-400">
-                No revenue data yet
+                No revenue data for {selectedYear}
               </div>
             )}
           </div>
@@ -536,6 +728,48 @@ export default function Dashboard() {
             ) : (
               <div className="h-64 flex items-center justify-center text-slate-400">
                 No data yet
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Charts Row 2 - Package Analytics & Conversion */}
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          {/* Package Performance */}
+          <div className="bg-white rounded-xl p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-800 mb-4">Package Performance</h2>
+            {packageData.length > 0 ? (
+              <>
+                <PackagePieChart data={packageData} />
+                <div className="mt-4 space-y-2">
+                  {packageData.map((pkg) => (
+                    <div key={pkg.name} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded" style={{ backgroundColor: pkg.color }}></span>
+                        <span className="text-slate-700">{pkg.name}</span>
+                      </div>
+                      <div className="text-slate-600">
+                        {pkg.count} bookings • RM {pkg.avgValue.toLocaleString()} avg
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="h-64 flex items-center justify-center text-slate-400">
+                No package data for {selectedYear}
+              </div>
+            )}
+          </div>
+
+          {/* Conversion Funnel */}
+          <div className="bg-white rounded-xl p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-800 mb-4">Conversion Funnel</h2>
+            {conversionData.some(d => d.count > 0) ? (
+              <ConversionFunnelChart data={conversionData} />
+            ) : (
+              <div className="h-64 flex items-center justify-center text-slate-400">
+                No conversion data for {selectedYear}
               </div>
             )}
           </div>

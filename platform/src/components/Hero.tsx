@@ -77,13 +77,13 @@ export default function Hero() {
             Book Your Date
           </a>
           {siteConfig.features.showSongCatalog && (
-            <a
-              href="#songs"
-              className="px-8 py-4 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all flex items-center gap-2"
-            >
-              <Play className="w-4 h-4" />
-              View Repertoire
-            </a>
+          <a
+            href="#songs"
+            className="px-8 py-4 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all flex items-center gap-2"
+          >
+            <Play className="w-4 h-4" />
+            View Repertoire
+          </a>
           )}
         </motion.div>
 

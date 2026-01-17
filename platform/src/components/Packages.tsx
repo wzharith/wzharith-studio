@@ -90,20 +90,20 @@ export default function Packages() {
 
               {/* Stats */}
               {(pkg.songs || pkg.duration) && (
-                <div className="flex justify-center gap-4 mb-6 pb-6 border-b border-midnight-700">
+              <div className="flex justify-center gap-4 mb-6 pb-6 border-b border-midnight-700">
                   {pkg.songs && (
-                    <div className="text-center">
-                      <Music className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                      <span className="text-xs text-midnight-400">{pkg.songs}</span>
-                    </div>
+                <div className="text-center">
+                  <Music className="w-4 h-4 text-gold-400 mx-auto mb-1" />
+                  <span className="text-xs text-midnight-400">{pkg.songs}</span>
+                </div>
                   )}
                   {pkg.duration && (
-                    <div className="text-center">
-                      <Clock className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                      <span className="text-xs text-midnight-400">{pkg.duration}</span>
-                    </div>
-                  )}
+                <div className="text-center">
+                  <Clock className="w-4 h-4 text-gold-400 mx-auto mb-1" />
+                  <span className="text-xs text-midnight-400">{pkg.duration}</span>
                 </div>
+                  )}
+              </div>
               )}
 
               {/* Features */}
@@ -135,36 +135,36 @@ export default function Packages() {
 
         {/* Add-ons */}
         {addons.length > 0 && !(useCloud && isLoading) && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={isInView ? { opacity: 1, y: 0 } : {}}
-            transition={{ delay: 0.5 }}
-            className="glass rounded-2xl p-8 max-w-3xl mx-auto"
-          >
-            <h3 className="font-display text-xl font-semibold text-white text-center mb-6">
-              Add-On Services
-            </h3>
-            <div className="grid sm:grid-cols-2 gap-4">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={isInView ? { opacity: 1, y: 0 } : {}}
+          transition={{ delay: 0.5 }}
+          className="glass rounded-2xl p-8 max-w-3xl mx-auto"
+        >
+          <h3 className="font-display text-xl font-semibold text-white text-center mb-6">
+            Add-On Services
+          </h3>
+          <div className="grid sm:grid-cols-2 gap-4">
               {addons.map((addon, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between py-2 border-b border-midnight-700 last:border-0"
-                >
+              <div
+                key={i}
+                className="flex items-center justify-between py-2 border-b border-midnight-700 last:border-0"
+              >
                   <div>
-                    <span className="font-sans text-sm text-midnight-300">
-                      {addon.name}
-                    </span>
+                <span className="font-sans text-sm text-midnight-300">
+                  {addon.name}
+                </span>
                     {addon.description && (
                       <p className="text-xs text-midnight-500">{addon.description}</p>
                     )}
                   </div>
-                  <span className="font-sans text-sm font-medium text-gold-400">
+                <span className="font-sans text-sm font-medium text-gold-400">
                     {addon.priceDisplay}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
+                </span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
         )}
 
         {/* Note */}

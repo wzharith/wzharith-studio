@@ -448,7 +448,7 @@ ${data.message || 'None'}
               WhatsApp
             </a>
             {siteConfig.social.instagram && (
-              <a
+            <a
                 href={getSocialUrl('instagram')}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -461,13 +461,13 @@ ${data.message || 'None'}
             {siteConfig.social.tiktok && (
               <a
                 href={getSocialUrl('tiktok')}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
-              >
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full text-gold-400 text-sm hover:bg-gold-500/10 transition-all"
+            >
                 <TikTokIcon className="w-4 h-4" />
                 @{siteConfig.social.tiktok}
-              </a>
+            </a>
             )}
           </div>
         </motion.div>

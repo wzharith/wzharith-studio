@@ -20,6 +20,8 @@ interface RevenueData {
   month: string;
   revenue: number;
   count: number;
+  compareRevenue?: number;
+  compareCount?: number;
 }
 
 interface StatusData {
@@ -28,8 +30,8 @@ interface StatusData {
   color: string;
 }
 
-// Revenue Bar Chart
-export function RevenueChart({ data }: { data: RevenueData[] }) {
+// Revenue Bar Chart with optional comparison
+export function RevenueChart({ data, showComparison = false }: { data: RevenueData[]; showComparison?: boolean }) {
   return (
     <div className="h-80">
       <ResponsiveContainer width="100%" height="100%">
@@ -46,7 +48,10 @@ export function RevenueChart({ data }: { data: RevenueData[] }) {
             tickFormatter={(value) => `RM${value.toLocaleString()}`}
           />
           <Tooltip
-            formatter={(value: number) => [`RM ${value.toLocaleString()}`, 'Revenue']}
+            formatter={(value: number, name: string) => [
+              `RM ${value.toLocaleString()}`,
+              name === 'revenue' ? 'Current Year' : 'Previous Year'
+            ]}
             contentStyle={{
               backgroundColor: 'white',
               border: '1px solid #e2e8f0',
@@ -54,10 +59,19 @@ export function RevenueChart({ data }: { data: RevenueData[] }) {
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
             }}
           />
+          {showComparison && (
+            <Bar
+              dataKey="compareRevenue"
+              fill="#cbd5e1"
+              radius={[4, 4, 0, 0]}
+              name="compareRevenue"
+            />
+          )}
           <Bar
             dataKey="revenue"
             fill="#f59e0b"
             radius={[4, 4, 0, 0]}
+            name="revenue"
           />
         </BarChart>
       </ResponsiveContainer>
@@ -174,6 +188,147 @@ export function BookingsChart({ data }: { data: RevenueData[] }) {
           />
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface PackageData {
+  name: string;
+  count: number;
+  revenue: number;
+  avgValue: number;
+  color: string;
+}
+
+// Package Performance Pie Chart
+export function PackagePieChart({ data }: { data: PackageData[] }) {
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={40}
+            outerRadius={70}
+            paddingAngle={3}
+            dataKey="count"
+            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            labelLine={false}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Pie>
+          <Legend
+            verticalAlign="bottom"
+            height={36}
+            formatter={(value) => <span className="text-slate-600 text-xs">{value}</span>}
+          />
+          <Tooltip
+            formatter={(value: number, name: string, props) => {
+              const entry = props.payload as PackageData;
+              return [
+                <div key="tooltip" className="text-xs">
+                  <div>{value} bookings</div>
+                  <div>RM {entry.revenue.toLocaleString()} total</div>
+                  <div>RM {entry.avgValue.toLocaleString()} avg</div>
+                </div>,
+                name
+              ];
+            }}
+            contentStyle={{
+              backgroundColor: 'white',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+            }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// Package Revenue Bar Chart
+export function PackageRevenueChart({ data }: { data: PackageData[] }) {
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 60, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+          <XAxis
+            type="number"
+            stroke="#64748b"
+            fontSize={12}
+            tickFormatter={(value) => `RM${value.toLocaleString()}`}
+          />
+          <YAxis
+            type="category"
+            dataKey="name"
+            stroke="#64748b"
+            fontSize={11}
+            width={55}
+          />
+          <Tooltip
+            formatter={(value: number) => [`RM ${value.toLocaleString()}`, 'Revenue']}
+            contentStyle={{
+              backgroundColor: 'white',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+            }}
+          />
+          <Bar
+            dataKey="revenue"
+            radius={[0, 4, 4, 0]}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface ConversionData {
+  stage: string;
+  count: number;
+  color: string;
+}
+
+// Conversion Funnel Chart
+export function ConversionFunnelChart({ data }: { data: ConversionData[] }) {
+  const maxValue = Math.max(...data.map(d => d.count));
+
+  return (
+    <div className="space-y-3">
+      {data.map((stage, index) => {
+        const widthPercent = maxValue > 0 ? (stage.count / maxValue) * 100 : 0;
+        return (
+          <div key={stage.stage} className="relative">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-sm font-medium text-slate-700">{stage.stage}</span>
+              <span className="text-sm font-bold text-slate-800">{stage.count}</span>
+            </div>
+            <div className="h-8 bg-slate-100 rounded-lg overflow-hidden">
+              <div
+                className="h-full rounded-lg transition-all duration-500"
+                style={{
+                  width: `${widthPercent}%`,
+                  backgroundColor: stage.color,
+                }}
+              />
+            </div>
+            {index < data.length - 1 && data[index + 1].count > 0 && stage.count > 0 && (
+              <div className="text-xs text-slate-500 mt-1 text-right">
+                {((data[index + 1].count / stage.count) * 100).toFixed(0)}% conversion
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

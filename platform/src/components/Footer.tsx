@@ -117,11 +117,11 @@ export default function Footer() {
                 {siteConfig.contact.email}
               </a>
               {siteConfig.social.instagram && (
-                <a
+              <a
                   href={getSocialUrl('instagram')}
-                  className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
-                >
-                  <Instagram className="w-4 h-4" />
+                className="flex items-center gap-2 text-sm text-midnight-400 hover:text-gold-400 transition-colors"
+              >
+                <Instagram className="w-4 h-4" />
                   @{siteConfig.social.instagram}
                 </a>
               )}
@@ -132,7 +132,7 @@ export default function Footer() {
                 >
                   <TikTokIcon className="w-4 h-4" />
                   @{siteConfig.social.tiktok}
-                </a>
+              </a>
               )}
             </div>
           </div>

@@ -125,14 +125,14 @@ export default function Collaborators() {
               Let&apos;s Collaborate
             </a>
             {siteConfig.social.instagram && (
-              <a
+            <a
                 href={getSocialUrl('instagram')}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-6 py-3 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all"
-              >
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-6 py-3 glass text-gold-400 font-sans font-medium rounded-full hover:bg-gold-500/10 transition-all"
+            >
                 Follow @{siteConfig.social.instagram}
-              </a>
+            </a>
             )}
           </div>
         </motion.div>

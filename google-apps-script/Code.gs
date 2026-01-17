@@ -35,6 +35,7 @@ const SHEETS = {
   INQUIRIES: 'Inquiries',
   EVENTS: 'Events',
   CONFIG: 'Config',
+  CONFIG_HISTORY: 'ConfigHistory',
   SUBSCRIBERS: 'Subscribers',
 };
 
@@ -91,8 +92,14 @@ function doGet(e) {
       case 'saveSubscriber':
         result = saveSubscriber(e.parameter.phone);
         break;
+      case 'archiveConfig':
+        result = archiveConfig(e.parameter.year);
+        break;
+      case 'getConfigHistory':
+        result = getConfigHistory();
+        break;
       default:
-        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig', 'saveSubscriber'] };
+        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig', 'saveSubscriber', 'archiveConfig', 'getConfigHistory'] };
     }
 
     return ContentService
@@ -851,6 +858,112 @@ function saveConfig(newConfig) {
   }
 
   return { success: true };
+}
+
+/**
+ * Archive current config for a specific year
+ * Stores a snapshot of packages and addons with the year label
+ */
+function archiveConfig(year) {
+  if (!year) {
+    year = new Date().getFullYear();
+  }
+
+  const sheet = getOrCreateSheet(SHEETS.CONFIG_HISTORY, [
+    'Year',
+    'Packages JSON',
+    'Addons JSON',
+    'Business Info JSON',
+    'Archived At',
+    'Notes',
+  ]);
+
+  // Get current config
+  const currentConfig = getConfig();
+  if (!currentConfig.success) {
+    return { success: false, error: 'Could not get current config' };
+  }
+
+  const config = currentConfig.config;
+  const data = sheet.getDataRange().getValues();
+
+  // Check if year already exists
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(year)) {
+      // Update existing archive
+      const rowIndex = i + 1;
+      sheet.getRange(rowIndex, 2).setValue(JSON.stringify(config.packages || []));
+      sheet.getRange(rowIndex, 3).setValue(JSON.stringify(config.addons || []));
+      sheet.getRange(rowIndex, 4).setValue(JSON.stringify({
+        business_name: config.business_name,
+        business_tagline: config.business_tagline,
+        contact_phone: config.contact_phone,
+        contact_email: config.contact_email,
+        banking_bank: config.banking_bank,
+        banking_accountName: config.banking_accountName,
+        banking_accountNumber: config.banking_accountNumber,
+      }));
+      sheet.getRange(rowIndex, 5).setValue(new Date().toISOString());
+      return { success: true, year: year, updated: true };
+    }
+  }
+
+  // Add new archive
+  sheet.appendRow([
+    year,
+    JSON.stringify(config.packages || []),
+    JSON.stringify(config.addons || []),
+    JSON.stringify({
+      business_name: config.business_name,
+      business_tagline: config.business_tagline,
+      contact_phone: config.contact_phone,
+      contact_email: config.contact_email,
+      banking_bank: config.banking_bank,
+      banking_accountName: config.banking_accountName,
+      banking_accountNumber: config.banking_accountNumber,
+    }),
+    new Date().toISOString(),
+    '',
+  ]);
+
+  return { success: true, year: year, created: true };
+}
+
+/**
+ * Get all archived configs
+ */
+function getConfigHistory() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEETS.CONFIG_HISTORY);
+  if (!sheet) {
+    return { success: true, history: [] };
+  }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    return { success: true, history: [] };
+  }
+
+  const history = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    try {
+      history.push({
+        year: row[0],
+        packages: JSON.parse(row[1] || '[]'),
+        addons: JSON.parse(row[2] || '[]'),
+        businessInfo: JSON.parse(row[3] || '{}'),
+        archivedAt: row[4],
+        notes: row[5] || '',
+      });
+    } catch (e) {
+      // Skip malformed entries
+    }
+  }
+
+  // Sort by year descending
+  history.sort((a, b) => b.year - a.year);
+
+  return { success: true, history };
 }
 
 /**

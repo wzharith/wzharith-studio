@@ -664,6 +664,104 @@ export const saveConfigToGoogle = async (config: SiteConfigData): Promise<{ succ
   }
 };
 
+// =============================================================================
+// CONFIG HISTORY
+// =============================================================================
+
+export interface ConfigHistoryEntry {
+  year: number;
+  packages: Array<{
+    id: string;
+    name: string;
+    price: number;
+    priceDisplay: string;
+    description: string;
+  }>;
+  addons: Array<{
+    id: string;
+    name: string;
+    price: number;
+    priceDisplay: string;
+    description: string;
+  }>;
+  businessInfo: {
+    business_name?: string;
+    business_tagline?: string;
+    contact_phone?: string;
+    contact_email?: string;
+    banking_bank?: string;
+    banking_accountName?: string;
+    banking_accountNumber?: string;
+  };
+  archivedAt: string;
+  notes: string;
+}
+
+/**
+ * Archive current config for a specific year
+ */
+export const archiveConfig = async (year?: number): Promise<{ success: boolean; year?: number; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    return { success: false, error: 'Google sync not configured' };
+  }
+
+  try {
+    const targetYear = year || new Date().getFullYear();
+    const params = new URLSearchParams({
+      action: 'archiveConfig',
+      year: String(targetYear),
+    });
+
+    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return { success: result.success, year: result.year, error: result.error };
+    }
+
+    return { success: false, error: 'Failed to archive config' };
+  } catch (error) {
+    console.error('[ConfigHistory] Archive error:', error);
+    return { success: false, error: String(error) };
+  }
+};
+
+/**
+ * Get all archived config history
+ */
+export const fetchConfigHistory = async (): Promise<{ success: boolean; history: ConfigHistoryEntry[]; error?: string }> => {
+  if (!isGoogleSyncEnabled()) {
+    return { success: false, history: [], error: 'Google sync not configured' };
+  }
+
+  try {
+    const url = `${GOOGLE_SCRIPT_URL}?action=getConfigHistory`;
+    console.log('[ConfigHistory] Fetching from:', url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log('[ConfigHistory] Got:', data);
+      return {
+        success: true,
+        history: data.history || [],
+      };
+    }
+
+    return { success: false, history: [], error: 'Failed to fetch config history' };
+  } catch (error) {
+    console.error('[ConfigHistory] Error:', error);
+    return { success: false, history: [], error: String(error) };
+  }
+};
+
 /**
  * Save notification subscriber phone to Google Sheets
  */

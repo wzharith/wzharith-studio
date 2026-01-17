@@ -1,13 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
 import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
   fetchConfig,
   saveConfigToGoogle,
+  archiveConfig,
+  fetchConfigHistory,
   type SiteConfigData,
+  type ConfigHistoryEntry,
 } from '@/lib/google-sync';
 import { clearConfigCache } from '@/lib/cloud-config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
@@ -55,6 +58,12 @@ export default function AdminSettings() {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [addons, setAddons] = useState<AddonItem[]>([]);
 
+  // Config history state
+  const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archiveYear, setArchiveYear] = useState(new Date().getFullYear());
+  const [showHistory, setShowHistory] = useState(false);
+
   // Check authentication (shared auth)
   useEffect(() => {
     if (checkAuth()) {
@@ -67,6 +76,7 @@ export default function AdminSettings() {
   useEffect(() => {
     if (isAuthenticated) {
       loadConfig();
+      loadConfigHistory();
     }
   }, [isAuthenticated]);
 
@@ -192,6 +202,30 @@ export default function AdminSettings() {
     }
 
     setIsRefreshing(false);
+  };
+
+  // Load config history
+  const loadConfigHistory = async () => {
+    if (isGoogleSyncEnabled()) {
+      const result = await fetchConfigHistory();
+      if (result.success) {
+        setConfigHistory(result.history);
+      }
+    }
+  };
+
+  // Archive current config
+  const handleArchive = async () => {
+    setIsArchiving(true);
+    const result = await archiveConfig(archiveYear);
+    if (result.success) {
+      setSaveMessage(`Config archived for ${archiveYear}!`);
+      loadConfigHistory(); // Refresh history
+    } else {
+      setSaveMessage('Error: ' + (result.error || 'Failed to archive'));
+    }
+    setIsArchiving(false);
+    setTimeout(() => setSaveMessage(''), 3000);
   };
 
   const handleSave = async () => {
@@ -927,6 +961,91 @@ export default function AdminSettings() {
                   Sync configuration between Google Sheets and your static site files.
                 </p>
 
+                {/* Archive Config */}
+                <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Archive className="w-5 h-5 text-amber-600" />
+                    <h3 className="font-medium text-amber-800">Archive Current Config</h3>
+                  </div>
+                  <p className="text-sm text-amber-700 mb-3">
+                    Save a snapshot of your current packages and pricing for historical reference.
+                    Useful when changing prices for a new year.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-amber-700">Year:</label>
+                      <select
+                        value={archiveYear}
+                        onChange={(e) => setArchiveYear(Number(e.target.value))}
+                        className="px-3 py-2 border border-amber-300 rounded-lg bg-white text-amber-800"
+                      >
+                        {[2024, 2025, 2026, 2027].map(y => (
+                          <option key={y} value={y}>{y}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={handleArchive}
+                      disabled={isArchiving || !isGoogleSyncEnabled()}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Archive className="w-4 h-4" />
+                      {isArchiving ? 'Archiving...' : 'Archive Now'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Config History */}
+                <div className="bg-white rounded-lg p-4 border">
+                  <button
+                    onClick={() => setShowHistory(!showHistory)}
+                    className="w-full flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-5 h-5 text-slate-600" />
+                      <h3 className="font-medium text-slate-700">Config History</h3>
+                      <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">
+                        {configHistory.length} snapshots
+                      </span>
+                    </div>
+                    {showHistory ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </button>
+
+                  {showHistory && (
+                    <div className="mt-4 space-y-3">
+                      {configHistory.length === 0 ? (
+                        <p className="text-sm text-slate-500 text-center py-4">
+                          No archived configs yet. Archive your first snapshot above.
+                        </p>
+                      ) : (
+                        configHistory.map((entry) => (
+                          <div key={entry.year} className="border rounded-lg p-3 hover:border-amber-300 transition-colors">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-medium text-slate-800">{entry.year}</span>
+                              <span className="text-xs text-slate-500">
+                                Archived: {new Date(entry.archivedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              <div className="text-slate-600">
+                                <span className="font-medium">{entry.packages.length}</span> packages
+                              </div>
+                              <div className="text-slate-600">
+                                <span className="font-medium">{entry.addons.length}</span> add-ons
+                              </div>
+                            </div>
+                            {entry.packages.length > 0 && (
+                              <div className="mt-2 text-xs text-slate-500">
+                                Packages: {entry.packages.map(p => `${p.name} (RM${p.price})`).join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Current Status */}
                 <div className="bg-slate-50 rounded-lg p-4 border">
                   <h3 className="font-medium text-slate-700 mb-2">Current Data Flow</h3>
@@ -939,18 +1058,6 @@ export default function AdminSettings() {
                       <span className="w-2 h-2 bg-amber-500 rounded-full"></span>
                       <span><strong>Main Site:</strong> Uses site.config.ts (static, fast)</span>
                     </div>
-                  </div>
-                </div>
-
-                {/* Push to Cloud */}
-                <div className="bg-white rounded-lg p-4 border">
-                  <h3 className="font-medium text-slate-700 mb-2">Push to Cloud</h3>
-                  <p className="text-sm text-slate-500 mb-3">
-                    Changes you make in this admin panel are automatically saved to Google Sheets when you click &quot;Save Changes&quot;.
-                  </p>
-                  <div className="flex items-center gap-2 text-sm text-emerald-600">
-                    <span className="w-4 h-4">✓</span>
-                    <span>Auto-enabled on save</span>
                   </div>
                 </div>
 
