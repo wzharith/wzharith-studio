@@ -22,7 +22,15 @@ import {
   XCircle,
   Settings,
   Home,
+  Phone,
+  MapPin,
+  Music,
+  MessageCircle,
+  ExternalLink,
+  AlertTriangle,
+  Zap,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
@@ -56,6 +64,11 @@ export default function Dashboard() {
   // Year selector state
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [compareYear, setCompareYear] = useState<number | null>(null);
+
+  // Invoice list modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalTitle, setModalTitle] = useState('');
+  const [modalFilter, setModalFilter] = useState<string | null>(null);
 
   // Available years from data
   const availableYears = useMemo(() => {
@@ -240,6 +253,156 @@ export default function Dashboard() {
       bookings: Number(bookingsGrowth),
     };
   }, [stats, compareStats]);
+
+  // ACTION ITEMS - Items needing attention
+  const actionItems = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    const sevenDaysFromNow = new Date(today);
+    sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+    const sevenDaysStr = sevenDaysFromNow.toISOString().split('T')[0];
+    const fourteenDaysFromNow = new Date(today);
+    fourteenDaysFromNow.setDate(fourteenDaysFromNow.getDate() + 14);
+    const fourteenDaysStr = fourteenDaysFromNow.toISOString().split('T')[0];
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+
+    // Only consider active, non-cancelled invoices
+    const relevantInvoices = activeInvoices.filter(inv =>
+      inv.status !== 'cancelled' && inv.status !== 'paid'
+    );
+
+    // Missing phone numbers (future events)
+    const missingPhone = relevantInvoices.filter(inv =>
+      !inv.clientPhone && inv.eventDate && inv.eventDate >= todayStr
+    );
+
+    // Missing venue (future events)
+    const missingVenue = relevantInvoices.filter(inv =>
+      !inv.eventVenue && inv.eventDate && inv.eventDate >= todayStr
+    );
+
+    // No deposit paid (invoices only, future events)
+    const noDeposit = relevantInvoices.filter(inv =>
+      inv.documentType === 'invoice' &&
+      !inv.depositPaid &&
+      inv.eventDate && inv.eventDate >= todayStr
+    );
+
+    // Balance due soon (within 7 days of event, not fully paid)
+    const balanceDueSoon = activeInvoices.filter(inv => {
+      if (inv.status === 'paid' || inv.status === 'cancelled') return false;
+      if (!inv.eventDate) return false;
+      // Event is within next 7 days
+      if (inv.eventDate >= todayStr && inv.eventDate <= sevenDaysStr) {
+        // Has balance remaining
+        const balance = inv.total - (inv.depositPaid || 0);
+        return balance > 0;
+      }
+      return false;
+    });
+
+    // Stale quotations (older than 7 days, not converted)
+    const staleQuotations = activeInvoices.filter(inv =>
+      inv.documentType === 'quotation' &&
+      inv.status === 'draft' &&
+      inv.createdAt && inv.createdAt < sevenDaysAgoStr
+    );
+
+    // Song confirmation due (2 weeks before event)
+    const songConfirmationDue = activeInvoices.filter(inv => {
+      if (inv.status === 'cancelled') return false;
+      if (!inv.eventDate) return false;
+      // Event is within next 14 days but more than 7 days away
+      return inv.eventDate >= sevenDaysStr && inv.eventDate <= fourteenDaysStr;
+    });
+
+    // Upcoming events (next 14 days)
+    const upcomingEvents = activeInvoices
+      .filter(inv => {
+        if (inv.status === 'cancelled') return false;
+        if (!inv.eventDate) return false;
+        return inv.eventDate >= todayStr && inv.eventDate <= fourteenDaysStr;
+      })
+      .sort((a, b) => (a.eventDate || '').localeCompare(b.eventDate || ''));
+
+    const totalActionItems = missingPhone.length + missingVenue.length +
+      noDeposit.length + balanceDueSoon.length + staleQuotations.length;
+
+    return {
+      missingPhone,
+      missingVenue,
+      noDeposit,
+      balanceDueSoon,
+      staleQuotations,
+      songConfirmationDue,
+      upcomingEvents,
+      totalActionItems,
+    };
+  }, [activeInvoices]);
+
+  // Router for navigation
+  const router = useRouter();
+
+  // Open modal with filtered invoice list
+  const openInvoiceModal = (filter: string, title: string) => {
+    setModalFilter(filter);
+    setModalTitle(title);
+    setModalOpen(true);
+  };
+
+  // Get filtered invoices for modal based on filter type
+  const getModalInvoices = useMemo(() => {
+    if (!modalFilter) return [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+
+    switch (modalFilter) {
+      case 'paid':
+        return yearFilteredInvoices.filter(inv => inv.status === 'paid');
+      case 'pending':
+        return yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
+      case 'completed':
+        return yearFilteredInvoices.filter(inv => inv.status === 'paid' && inv.eventDate && inv.eventDate < todayStr);
+      case 'upcoming':
+        return activeInvoices.filter(inv => inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
+      case 'draft':
+        return yearFilteredInvoices.filter(inv => inv.status === 'draft');
+      case 'missing-phone':
+        return activeInvoices.filter(inv => !inv.clientPhone && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
+      case 'missing-venue':
+        return activeInvoices.filter(inv => !inv.eventVenue && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
+      case 'no-deposit':
+        return activeInvoices.filter(inv => inv.documentType === 'invoice' && !inv.depositPaid && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
+      case 'balance-due':
+        const sevenDaysFromNow = new Date(today);
+        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+        const sevenDaysStr = sevenDaysFromNow.toISOString().split('T')[0];
+        return activeInvoices.filter(inv => {
+          if (inv.status === 'paid' || inv.status === 'cancelled') return false;
+          if (!inv.eventDate) return false;
+          if (inv.eventDate >= todayStr && inv.eventDate <= sevenDaysStr) {
+            const balance = inv.total - (inv.depositPaid || 0);
+            return balance > 0;
+          }
+          return false;
+        });
+      case 'stale-quotations':
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+        return activeInvoices.filter(inv =>
+          inv.documentType === 'quotation' && inv.status === 'draft' && inv.createdAt && inv.createdAt < sevenDaysAgoStr
+        );
+      case 'all':
+      default:
+        return yearFilteredInvoices;
+    }
+  }, [modalFilter, yearFilteredInvoices, activeInvoices]);
 
   // Monthly revenue data for charts (full year for selected year)
   const monthlyData = useMemo(() => {
@@ -617,9 +780,173 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* ACTION ITEMS PANEL */}
+        {actionItems.totalActionItems > 0 && (
+          <div className="bg-gradient-to-r from-red-50 to-amber-50 border border-red-200 rounded-xl p-4 mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+              <h2 className="font-semibold text-red-800">
+                Action Items ({actionItems.totalActionItems})
+              </h2>
+              <span className="text-xs text-red-600 ml-auto">Click to view details</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+              {actionItems.missingPhone.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('missing-phone', 'Missing Phone Numbers')}
+                  className="flex items-center gap-2 bg-white hover:bg-red-50 border border-red-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <Phone className="w-4 h-4 text-red-500" />
+                  <div>
+                    <div className="text-sm font-medium text-red-700">{actionItems.missingPhone.length}</div>
+                    <div className="text-xs text-red-600">No Phone</div>
+                  </div>
+                </button>
+              )}
+              {actionItems.missingVenue.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('missing-venue', 'Missing Venues')}
+                  className="flex items-center gap-2 bg-white hover:bg-orange-50 border border-orange-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <MapPin className="w-4 h-4 text-orange-500" />
+                  <div>
+                    <div className="text-sm font-medium text-orange-700">{actionItems.missingVenue.length}</div>
+                    <div className="text-xs text-orange-600">No Venue</div>
+                  </div>
+                </button>
+              )}
+              {actionItems.noDeposit.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('no-deposit', 'No Deposit Paid')}
+                  className="flex items-center gap-2 bg-white hover:bg-amber-50 border border-amber-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <DollarSign className="w-4 h-4 text-amber-500" />
+                  <div>
+                    <div className="text-sm font-medium text-amber-700">{actionItems.noDeposit.length}</div>
+                    <div className="text-xs text-amber-600">No Deposit</div>
+                  </div>
+                </button>
+              )}
+              {actionItems.balanceDueSoon.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('balance-due', 'Balance Due Soon')}
+                  className="flex items-center gap-2 bg-white hover:bg-rose-50 border border-rose-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <Clock className="w-4 h-4 text-rose-500" />
+                  <div>
+                    <div className="text-sm font-medium text-rose-700">{actionItems.balanceDueSoon.length}</div>
+                    <div className="text-xs text-rose-600">Balance Due</div>
+                  </div>
+                </button>
+              )}
+              {actionItems.staleQuotations.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('stale-quotations', 'Stale Quotations')}
+                  className="flex items-center gap-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <FileText className="w-4 h-4 text-slate-500" />
+                  <div>
+                    <div className="text-sm font-medium text-slate-700">{actionItems.staleQuotations.length}</div>
+                    <div className="text-xs text-slate-600">Stale Quotes</div>
+                  </div>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* UPCOMING EVENTS TIMELINE (Next 14 Days) */}
+        {actionItems.upcomingEvents.length > 0 && (
+          <div className="bg-white rounded-xl p-4 shadow-sm mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-amber-500" />
+                Upcoming Events (Next 14 Days)
+              </h2>
+              <span className="text-xs text-slate-500">{actionItems.upcomingEvents.length} events</span>
+            </div>
+            <div className="space-y-3">
+              {actionItems.upcomingEvents.slice(0, 5).map((inv) => {
+                const eventDate = new Date(inv.eventDate + 'T00:00:00');
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const daysUntil = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                const balance = inv.total - (inv.depositPaid || 0);
+                const isFullyPaid = inv.status === 'paid' || balance <= 0;
+
+                return (
+                  <Link
+                    key={inv.invoiceNumber}
+                    href={`/invoice?load=${encodeURIComponent(inv.invoiceNumber)}`}
+                    className="flex items-center gap-4 p-3 rounded-lg hover:bg-slate-50 border border-slate-100 cursor-pointer"
+                  >
+                    {/* Days countdown */}
+                    <div className={`w-14 h-14 rounded-lg flex flex-col items-center justify-center ${
+                      daysUntil <= 3 ? 'bg-red-100 text-red-700' :
+                      daysUntil <= 7 ? 'bg-amber-100 text-amber-700' :
+                      'bg-blue-100 text-blue-700'
+                    }`}>
+                      <span className="text-lg font-bold">{daysUntil}</span>
+                      <span className="text-[10px] uppercase">days</span>
+                    </div>
+
+                    {/* Event details */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800 truncate">{inv.clientName || 'Unnamed'}</span>
+                        {/* Missing info badges */}
+                        {!inv.clientPhone && (
+                          <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full">
+                            <Phone className="w-2.5 h-2.5" />
+                          </span>
+                        )}
+                        {!inv.eventVenue && (
+                          <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded-full">
+                            <MapPin className="w-2.5 h-2.5" />
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                        <span>{eventDate.toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+                        <span>•</span>
+                        <span>{inv.eventVenue || 'Venue TBC'}</span>
+                      </div>
+                    </div>
+
+                    {/* Payment status */}
+                    <div className="text-right">
+                      <div className="text-sm font-medium text-slate-800">RM {inv.total.toLocaleString()}</div>
+                      {isFullyPaid ? (
+                        <span className="text-xs text-emerald-600 flex items-center gap-1 justify-end">
+                          <CheckCircle className="w-3 h-3" /> Paid
+                        </span>
+                      ) : inv.depositPaid > 0 ? (
+                        <span className="text-xs text-amber-600">Bal: RM {balance.toLocaleString()}</span>
+                      ) : (
+                        <span className="text-xs text-red-600">No deposit</span>
+                      )}
+                    </div>
+                  </Link>
+                );
+              })}
+              {actionItems.upcomingEvents.length > 5 && (
+                <button
+                  onClick={() => openInvoiceModal('upcoming', 'Upcoming Events')}
+                  className="w-full text-center text-sm text-amber-600 hover:text-amber-700 py-2"
+                >
+                  View all {actionItems.upcomingEvents.length} upcoming events →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Stats Cards - Row 1: Revenue & Pending */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <button
+            onClick={() => openInvoiceModal('paid', `Paid Invoices (${selectedYear})`)}
+            className="bg-white rounded-xl p-4 shadow-sm text-left hover:ring-2 hover:ring-emerald-300 transition-all"
+          >
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-emerald-100 p-2 rounded-lg">
                 <DollarSign className="w-5 h-5 text-emerald-600" />
@@ -630,9 +957,12 @@ export default function Dashboard() {
               RM {stats.totalRevenue.toLocaleString()}
             </p>
             <p className="text-xs text-emerald-600 mt-1">{stats.paidCount} paid invoices</p>
-          </div>
+          </button>
 
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <button
+            onClick={() => openInvoiceModal('pending', `Pending (${selectedYear})`)}
+            className="bg-white rounded-xl p-4 shadow-sm text-left hover:ring-2 hover:ring-amber-300 transition-all"
+          >
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-amber-100 p-2 rounded-lg">
                 <Clock className="w-5 h-5 text-amber-600" />
@@ -643,10 +973,13 @@ export default function Dashboard() {
               RM {stats.pendingAmount.toLocaleString()}
             </p>
             <p className="text-xs text-amber-600 mt-1">{stats.pendingCount} pending</p>
-          </div>
+          </button>
 
           {/* YTD: Completed Shows */}
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <button
+            onClick={() => openInvoiceModal('completed', `Completed Shows (${selectedYear})`)}
+            className="bg-white rounded-xl p-4 shadow-sm text-left hover:ring-2 hover:ring-green-300 transition-all"
+          >
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-green-100 p-2 rounded-lg">
                 <CheckCircle className="w-5 h-5 text-green-600" />
@@ -655,10 +988,13 @@ export default function Dashboard() {
             </div>
             <p className="text-2xl font-bold text-slate-800">{stats.completedEvents}</p>
             <p className="text-xs text-green-600 mt-1">Completed performances</p>
-          </div>
+          </button>
 
           {/* Upcoming Shows */}
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <button
+            onClick={() => openInvoiceModal('upcoming', 'Upcoming Events')}
+            className="bg-white rounded-xl p-4 shadow-sm text-left hover:ring-2 hover:ring-blue-300 transition-all"
+          >
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-blue-100 p-2 rounded-lg">
                 <Calendar className="w-5 h-5 text-blue-600" />
@@ -667,12 +1003,15 @@ export default function Dashboard() {
             </div>
             <p className="text-2xl font-bold text-slate-800">{stats.upcomingEvents}</p>
             <p className="text-xs text-blue-600 mt-1">{stats.thisMonthEvents} this month</p>
-          </div>
+          </button>
         </div>
 
         {/* Stats Cards - Row 2 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <button
+            onClick={() => openInvoiceModal('all', `All Bookings (${selectedYear})`)}
+            className="bg-white rounded-xl p-4 shadow-sm text-left hover:ring-2 hover:ring-slate-300 transition-all"
+          >
             <div className="flex items-center gap-3 mb-2">
               <div className="bg-slate-100 p-2 rounded-lg">
                 <FileText className="w-5 h-5 text-slate-600" />
@@ -680,8 +1019,8 @@ export default function Dashboard() {
               <span className="text-slate-500 text-sm">Total Bookings</span>
             </div>
             <p className="text-2xl font-bold text-slate-800">{stats.totalBookings}</p>
-            <p className="text-xs text-slate-600 mt-1">All time</p>
-          </div>
+            <p className="text-xs text-slate-600 mt-1">{selectedYear}</p>
+          </button>
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
@@ -872,41 +1211,151 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Recent Activity */}
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-800 mb-4">Recent Activity</h2>
-            <div className="space-y-3 max-h-80 overflow-y-auto">
-              {recentActivity.length === 0 ? (
-                <p className="text-slate-400 text-center py-8">No activity yet</p>
-              ) : (
-                recentActivity.map(invoice => (
-                  <div key={invoice.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50">
-                    <StatusIcon status={invoice.status} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">
-                        {invoice.clientName || 'Unnamed'}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {invoice.invoiceNumber} • {invoice.eventDate || 'No date'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-slate-800">
-                        RM {invoice.total.toLocaleString()}
-                      </p>
-                      <p className={`text-xs capitalize ${
-                        invoice.status === 'paid' ? 'text-emerald-600' :
-                        invoice.status === 'sent' ? 'text-amber-600' :
-                        invoice.status === 'cancelled' ? 'text-red-600' :
-                        'text-slate-400'
-                      }`}>
-                        {invoice.status}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+          {/* Balance Due Alerts & Stale Quotations */}
+          <div className="space-y-6">
+            {/* Balance Due Alerts */}
+            {actionItems.balanceDueSoon.length > 0 && (
+              <div className="bg-gradient-to-r from-rose-50 to-red-50 border border-rose-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="w-5 h-5 text-rose-500" />
+                  <h3 className="font-semibold text-rose-800">Balance Due Soon ({actionItems.balanceDueSoon.length})</h3>
+                </div>
+                <div className="space-y-2">
+                  {actionItems.balanceDueSoon.map((inv) => {
+                    const eventDate = new Date(inv.eventDate + 'T00:00:00');
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const daysUntil = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    const balance = inv.total - (inv.depositPaid || 0);
+
+                    return (
+                      <Link
+                        key={inv.invoiceNumber}
+                        href={`/invoice?load=${encodeURIComponent(inv.invoiceNumber)}`}
+                        className="flex items-center justify-between bg-white hover:bg-rose-50 rounded-lg p-3 border border-rose-100 transition-colors"
+                      >
+                        <div>
+                          <p className="font-medium text-slate-800 text-sm">{inv.clientName}</p>
+                          <p className="text-xs text-slate-500">
+                            {eventDate.toLocaleDateString('en-MY', { day: 'numeric', month: 'short' })} • {daysUntil} days left
+                          </p>
+                        </div>
+                        <div className="text-right flex items-center gap-3">
+                          <div>
+                            <p className="font-bold text-rose-600">RM {balance.toLocaleString()}</p>
+                          </div>
+                          {inv.clientPhone && (
+                            <a
+                              href={`https://wa.me/${inv.clientPhone.replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <MessageCircle className="w-3 h-3" /> Remind
+                            </a>
+                          )}
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Stale Quotations */}
+            {actionItems.staleQuotations.length > 0 && (
+              <div className="bg-gradient-to-r from-slate-50 to-gray-50 border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <FileText className="w-5 h-5 text-slate-500" />
+                  <h3 className="font-semibold text-slate-700">Stale Quotations ({actionItems.staleQuotations.length})</h3>
+                  <span className="text-xs text-slate-500 ml-auto">Older than 7 days</span>
+                </div>
+                <div className="space-y-2">
+                  {actionItems.staleQuotations.slice(0, 3).map((inv) => {
+                    const createdDate = new Date(inv.createdAt);
+                    const today = new Date();
+                    const daysOld = Math.ceil((today.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
+
+                    return (
+                      <Link
+                        key={inv.invoiceNumber}
+                        href={`/invoice?load=${encodeURIComponent(inv.invoiceNumber)}`}
+                        className="flex items-center justify-between bg-white hover:bg-slate-100 rounded-lg p-3 border border-slate-100 transition-colors"
+                      >
+                        <div>
+                          <p className="font-medium text-slate-800 text-sm">{inv.clientName || 'Unnamed'}</p>
+                          <p className="text-xs text-slate-500">
+                            {inv.invoiceNumber} • {daysOld} days old
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {inv.clientPhone && (
+                            <a
+                              href={`https://wa.me/${inv.clientPhone.replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <MessageCircle className="w-3 h-3" /> Follow Up
+                            </a>
+                          )}
+                          <span className="text-sm font-medium text-slate-600">RM {inv.total.toLocaleString()}</span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                  {actionItems.staleQuotations.length > 3 && (
+                    <button
+                      onClick={() => openInvoiceModal('stale-quotations', 'Stale Quotations')}
+                      className="w-full text-center text-xs text-slate-600 hover:text-slate-800 py-1"
+                    >
+                      View all {actionItems.staleQuotations.length} stale quotations →
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Activity (only if no alerts) */}
+            {actionItems.balanceDueSoon.length === 0 && actionItems.staleQuotations.length === 0 && (
+              <div className="bg-white rounded-xl p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-slate-800 mb-4">Recent Activity</h2>
+                <div className="space-y-3 max-h-80 overflow-y-auto">
+                  {recentActivity.length === 0 ? (
+                    <p className="text-slate-400 text-center py-8">No activity yet</p>
+                  ) : (
+                    recentActivity.slice(0, 5).map(invoice => (
+                      <div key={invoice.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50">
+                        <StatusIcon status={invoice.status} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-slate-800 truncate">
+                            {invoice.clientName || 'Unnamed'}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {invoice.invoiceNumber} • {invoice.eventDate || 'No date'}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-medium text-slate-800">
+                            RM {invoice.total.toLocaleString()}
+                          </p>
+                          <p className={`text-xs capitalize ${
+                            invoice.status === 'paid' ? 'text-emerald-600' :
+                            invoice.status === 'sent' ? 'text-amber-600' :
+                            invoice.status === 'cancelled' ? 'text-red-600' :
+                            'text-slate-400'
+                          }`}>
+                            {invoice.status}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -928,6 +1377,183 @@ export default function Dashboard() {
           </Link>
         </div>
       </div>
+
+      {/* Invoice List Modal */}
+      {modalOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => setModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">{modalTitle}</h2>
+                <p className="text-slate-400 text-sm">{getModalInvoices.length} items</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <Link
+                  href="/invoice"
+                  className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Open Invoice Page
+                </Link>
+                <button
+                  onClick={() => setModalOpen(false)}
+                  className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                >
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {getModalInvoices.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                  <FileText className="w-16 h-16 mb-4" />
+                  <p className="text-lg">No items found</p>
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {getModalInvoices.map((inv) => {
+                    const eventDate = inv.eventDate ? new Date(inv.eventDate + 'T00:00:00') : null;
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const daysUntil = eventDate ? Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
+                    const balance = inv.total - (inv.depositPaid || 0);
+                    const isFullyPaid = inv.status === 'paid' || balance <= 0;
+
+                    return (
+                      <Link
+                        key={inv.invoiceNumber}
+                        href={`/invoice?load=${encodeURIComponent(inv.invoiceNumber)}`}
+                        className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                      >
+                        {/* Days countdown or status icon */}
+                        {daysUntil !== null && daysUntil >= 0 ? (
+                          <div className={`w-14 h-14 rounded-xl flex flex-col items-center justify-center shrink-0 ${
+                            daysUntil <= 3 ? 'bg-red-100 text-red-700' :
+                            daysUntil <= 7 ? 'bg-amber-100 text-amber-700' :
+                            'bg-blue-100 text-blue-700'
+                          }`}>
+                            <span className="text-lg font-bold">{daysUntil}</span>
+                            <span className="text-[10px] uppercase">days</span>
+                          </div>
+                        ) : (
+                          <div className={`w-14 h-14 rounded-xl flex items-center justify-center shrink-0 ${
+                            inv.status === 'paid' ? 'bg-emerald-100' :
+                            inv.status === 'sent' ? 'bg-amber-100' :
+                            inv.status === 'cancelled' ? 'bg-red-100' :
+                            'bg-slate-100'
+                          }`}>
+                            <StatusIcon status={inv.status} />
+                          </div>
+                        )}
+
+                        {/* Main info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              inv.documentType === 'quotation' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {inv.documentType === 'quotation' ? 'QUO' : 'INV'}
+                            </span>
+                            <span className="font-semibold text-slate-800">{inv.clientName || 'Unnamed'}</span>
+                            <span className="text-xs text-slate-400">{inv.invoiceNumber}</span>
+                            {/* Missing info badges */}
+                            {!inv.clientPhone && (
+                              <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full">
+                                <Phone className="w-2.5 h-2.5" /> No phone
+                              </span>
+                            )}
+                            {!inv.eventVenue && (
+                              <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded-full">
+                                <MapPin className="w-2.5 h-2.5" /> No venue
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+                            {eventDate && (
+                              <span className="flex items-center gap-1">
+                                <Calendar className="w-3 h-3" />
+                                {eventDate.toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                              </span>
+                            )}
+                            {inv.eventVenue && (
+                              <>
+                                <span>•</span>
+                                <span className="truncate max-w-[200px]">{inv.eventVenue}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Amount & actions */}
+                        <div className="text-right shrink-0">
+                          <div className="text-lg font-bold text-slate-800">RM {inv.total.toLocaleString()}</div>
+                          {isFullyPaid ? (
+                            <span className="text-xs text-emerald-600 flex items-center gap-1 justify-end">
+                              <CheckCircle className="w-3 h-3" /> Paid
+                            </span>
+                          ) : inv.depositPaid > 0 ? (
+                            <span className="text-xs text-amber-600">Balance: RM {balance.toLocaleString()}</span>
+                          ) : inv.documentType === 'invoice' ? (
+                            <span className="text-xs text-red-600">No deposit</span>
+                          ) : (
+                            <span className={`text-xs capitalize ${
+                              inv.status === 'sent' ? 'text-blue-600' : 'text-slate-500'
+                            }`}>{inv.status}</span>
+                          )}
+                        </div>
+
+                        {/* Quick Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {inv.clientPhone && (
+                            <a
+                              href={`https://wa.me/${inv.clientPhone.replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg transition-colors"
+                              title="WhatsApp"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </a>
+                          )}
+                          <span
+                            className="p-2 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-lg transition-colors"
+                            title="Open in Invoice Generator"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t flex items-center justify-between">
+              <p className="text-sm text-slate-500">
+                Total: RM {getModalInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
+              </p>
+              <button
+                onClick={() => setModalOpen(false)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

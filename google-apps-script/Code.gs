@@ -211,6 +211,7 @@ function saveInvoice(invoice) {
     invoice.eventDate,
     eventTime,
     invoice.eventVenue,
+    '', // Geo Location - manually set in Sheets (place chip column)
     calculateSubtotal(invoice.items),
     invoice.discount || 0,
     invoice.total,
@@ -471,6 +472,48 @@ function formatTimeFromDate(value) {
 }
 
 /**
+ * Format date as YYYY-MM-DD in script timezone
+ * Prevents timezone issues when JSON serializing Date objects
+ *
+ * Problem: Google Sheets returns Date objects which serialize to UTC ISO strings
+ * e.g., "2026-02-14 00:00 MYT" becomes "2026-02-13T16:00:00.000Z" (wrong day!)
+ *
+ * Solution: Format in local timezone before sending to client
+ */
+function formatDateSafe(value) {
+  if (!value) return '';
+
+  // If it's a Date object, format it in script's timezone
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  // If it's a string, extract date only if ISO format
+  const str = String(value);
+  if (str.includes('T')) {
+    return str.split('T')[0];
+  }
+
+  return str;
+}
+
+/**
+ * Format datetime as ISO string in script timezone (for createdAt, updatedAt)
+ * Preserves time component but ensures correct timezone
+ */
+function formatDateTimeSafe(value) {
+  if (!value) return '';
+
+  // If it's a Date object, format it in script's timezone as ISO-like string
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  }
+
+  // Already a string - return as is
+  return String(value);
+}
+
+/**
  * Get all invoices from sheet
  */
 function getInvoices() {
@@ -483,6 +526,10 @@ function getInvoices() {
   const headers = data[0];
   const invoices = [];
 
+  // Date fields that need timezone-safe formatting
+  const dateOnlyFields = ['eventDate']; // Format as YYYY-MM-DD
+  const dateTimeFields = ['createdAt', 'updatedAt', 'deletedAt']; // Format with time
+
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const invoice = {};
@@ -493,6 +540,16 @@ function getInvoices() {
       // Format time fields properly (Event Time column)
       if (key === 'eventTime' && value) {
         value = formatTimeFromDate(value);
+      }
+
+      // Format date-only fields (prevents timezone shift)
+      if (dateOnlyFields.includes(key) && value) {
+        value = formatDateSafe(value);
+      }
+
+      // Format datetime fields (preserves time but fixes timezone)
+      if (dateTimeFields.includes(key) && value) {
+        value = formatDateTimeSafe(value);
       }
 
       invoice[key] = value;

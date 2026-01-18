@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home } from 'lucide-react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home, Search, ChevronLeft, ArrowUpDown, Phone, MapPin, DollarSign, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import { useCloudConfig } from '@/lib/cloud-config';
@@ -69,7 +70,12 @@ interface StoredInvoice {
   deletedAt?: string; // Soft delete timestamp
 }
 
-export default function InvoiceGenerator() {
+function InvoiceGeneratorContent() {
+  // URL params for auto-loading specific invoice
+  const searchParams = useSearchParams();
+  const loadInvoiceNumber = searchParams.get('load');
+  const [hasAutoLoaded, setHasAutoLoaded] = useState(false);
+
   // Password state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true); // Prevent flash
@@ -82,15 +88,104 @@ export default function InvoiceGenerator() {
 
   // History panel
   const [showHistory, setShowHistory] = useState(false);
-  const [historyTab, setHistoryTab] = useState<'active' | 'deleted'>('active');
+  const [historyTab, setHistoryTab] = useState<'all' | 'draft' | 'sent' | 'paid' | 'deleted'>('all');
   const [savedInvoices, setSavedInvoices] = useState<StoredInvoice[]>([]);
 
-  // Filter and sort invoices for display (latest first)
-  const sortByLatest = (a: StoredInvoice, b: StoredInvoice) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt).sort(sortByLatest);
-  const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt).sort(sortByLatest);
-  const visibleInvoices = historyTab === 'active' ? activeInvoices : deletedInvoices;
+  // History filters - default to current year
+  const [historyYear, setHistoryYear] = useState<number | 'all'>(new Date().getFullYear());
+  const [historySearch, setHistorySearch] = useState('');
+  const [historySort, setHistorySort] = useState<'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'>('date-desc');
+  const [historyPage, setHistoryPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
+  // Get available years from invoices
+  const availableYears = Array.from(new Set(
+    savedInvoices
+      .map(inv => inv.eventDate ? new Date(inv.eventDate).getFullYear() : null)
+      .filter((y): y is number => y !== null)
+  )).sort((a, b) => b - a);
+
+  // Filter and sort invoices for display
+  const sortInvoices = (a: StoredInvoice, b: StoredInvoice) => {
+    switch (historySort) {
+      case 'date-asc':
+        return new Date(a.eventDate || a.createdAt).getTime() - new Date(b.eventDate || b.createdAt).getTime();
+      case 'amount-desc':
+        return b.total - a.total;
+      case 'amount-asc':
+        return a.total - b.total;
+      case 'date-desc':
+      default:
+        return new Date(b.eventDate || b.createdAt).getTime() - new Date(a.eventDate || a.createdAt).getTime();
+    }
+  };
+
+  // Apply all filters
+  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt);
+  const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt);
+
+  // Helper to filter by year
+  const filterByYear = (invoices: StoredInvoice[]) => {
+    if (historyYear === 'all') return invoices;
+    return invoices.filter(inv => {
+      const invYear = inv.eventDate ? new Date(inv.eventDate).getFullYear() : null;
+      return invYear === historyYear;
+    });
+  };
+
+  // Year-filtered invoices for counts
+  const yearFilteredActive = filterByYear(activeInvoices);
+  const yearFilteredDeleted = filterByYear(deletedInvoices);
+
+  const filteredInvoices = (historyTab === 'deleted' ? yearFilteredDeleted : yearFilteredActive)
+    .filter(inv => {
+      // Status filter (for non-deleted)
+      if (historyTab !== 'deleted' && historyTab !== 'all') {
+        if (inv.status !== historyTab) return false;
+      }
+      // Search filter
+      if (historySearch) {
+        const search = historySearch.toLowerCase();
+        return (
+          inv.clientName?.toLowerCase().includes(search) ||
+          inv.invoiceNumber?.toLowerCase().includes(search) ||
+          inv.eventVenue?.toLowerCase().includes(search)
+        );
+      }
+      return true;
+    })
+    .sort(sortInvoices);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE);
+  const paginatedInvoices = filteredInvoices.slice(
+    (historyPage - 1) * ITEMS_PER_PAGE,
+    historyPage * ITEMS_PER_PAGE
+  );
+
+  // Reset page when filters change
+  const resetHistoryPage = () => setHistoryPage(1);
+
+  // Status counts for tabs - RESPECT YEAR FILTER
+  const statusCounts = {
+    all: yearFilteredActive.length,
+    draft: yearFilteredActive.filter(inv => inv.status === 'draft').length,
+    sent: yearFilteredActive.filter(inv => inv.status === 'sent').length,
+    paid: yearFilteredActive.filter(inv => inv.status === 'paid').length,
+    deleted: yearFilteredDeleted.length,
+  };
+
+  // Summary stats (based on year filter, before status/search filter)
+  const summaryStats = {
+    total: yearFilteredActive.length,
+    totalValue: yearFilteredActive.reduce((sum, inv) => sum + inv.total, 0),
+    collected: yearFilteredActive.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + inv.total, 0),
+    pending: yearFilteredActive.filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled').reduce((sum, inv) => sum + inv.total, 0),
+    deposits: yearFilteredActive.reduce((sum, inv) => sum + (inv.depositPaid || 0), 0),
+  };
+
+  // Legacy: visibleInvoices for compatibility
+  const visibleInvoices = paginatedInvoices;
 
   // Track currently loaded invoice for updates
   const [currentLoadedId, setCurrentLoadedId] = useState<string | null>(null);
@@ -522,7 +617,7 @@ export default function InvoiceGenerator() {
   };
 
   // Load invoice from history
-  const loadInvoice = (invoice: StoredInvoice) => {
+  const loadInvoice = useCallback((invoice: StoredInvoice) => {
     setCurrentLoadedId(invoice.id);
     setLinkedQuotationNumber(invoice.linkedQuotationNumber || null);
     setDocumentType(invoice.documentType);
@@ -546,7 +641,18 @@ export default function InvoiceGenerator() {
     setDiscountType(invoice.discountType);
     setDepositPaid(invoice.depositPaid);
     setShowHistory(false);
-  };
+  }, []);
+
+  // Auto-load invoice from URL param (e.g., /invoice?load=INV-2026-001)
+  useEffect(() => {
+    if (loadInvoiceNumber && savedInvoices.length > 0 && !hasAutoLoaded) {
+      const invoiceToLoad = savedInvoices.find(inv => inv.invoiceNumber === loadInvoiceNumber);
+      if (invoiceToLoad) {
+        loadInvoice(invoiceToLoad);
+        setHasAutoLoaded(true);
+      }
+    }
+  }, [loadInvoiceNumber, savedInvoices, hasAutoLoaded, loadInvoice]);
 
   // Delete invoice from history - uses invoiceNumber as unique identifier
   const deleteInvoice = (invoiceNumber: string) => {
@@ -709,6 +815,7 @@ export default function InvoiceGenerator() {
   // Sync all data to Google
   const [isSyncing, setIsSyncing] = useState(false);
   const [showWhatsAppMenu, setShowWhatsAppMenu] = useState(false);
+  const [historyWhatsAppMenu, setHistoryWhatsAppMenu] = useState<string | null>(null); // Track which invoice's WhatsApp menu is open
 
   const handleSyncToGoogle = async () => {
     if (!isGoogleSyncEnabled()) {
@@ -1808,11 +1915,11 @@ export default function InvoiceGenerator() {
       {showHistory && (
         <div className="fixed inset-0 bg-black/50 z-50 print:hidden" onClick={() => setShowHistory(false)}>
           <div
-            className="absolute right-0 top-0 h-full w-full max-w-lg bg-white shadow-2xl overflow-hidden flex flex-col"
+            className="absolute right-0 top-0 h-full w-full max-w-2xl bg-white shadow-2xl overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Panel Header */}
-            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+            <div className="bg-slate-900 text-white px-4 sm:px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <History className="w-5 h-5 text-amber-400" />
                 <h2 className="text-lg font-semibold">Invoice History</h2>
@@ -1825,67 +1932,132 @@ export default function InvoiceGenerator() {
               </button>
             </div>
 
-            {/* Tabs */}
-            <div className="flex border-b">
-              <button
-                onClick={() => setHistoryTab('active')}
-                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
-                  historyTab === 'active'
-                    ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50'
-                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                Active ({activeInvoices.length})
-              </button>
-              <button
-                onClick={() => setHistoryTab('deleted')}
-                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
-                  historyTab === 'deleted'
-                    ? 'text-red-600 border-b-2 border-red-500 bg-red-50'
-                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                Deleted ({deletedInvoices.length})
-              </button>
+            {/* Summary Stats Bar */}
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-4 sm:px-6 py-3 grid grid-cols-4 gap-2 sm:gap-4 text-white">
+              <div className="text-center">
+                <div className="text-lg sm:text-xl font-bold">{summaryStats.total}</div>
+                <div className="text-[10px] sm:text-xs text-slate-400">Records</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg sm:text-xl font-bold text-emerald-400">RM {summaryStats.collected.toLocaleString()}</div>
+                <div className="text-[10px] sm:text-xs text-slate-400">Collected</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg sm:text-xl font-bold text-amber-400">RM {summaryStats.pending.toLocaleString()}</div>
+                <div className="text-[10px] sm:text-xs text-slate-400">Pending</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg sm:text-xl font-bold text-blue-400">RM {summaryStats.deposits.toLocaleString()}</div>
+                <div className="text-[10px] sm:text-xs text-slate-400">Deposits</div>
+              </div>
             </div>
 
-            {/* Stats Summary - only show for active tab */}
-            {historyTab === 'active' && (
-              <div className="bg-slate-50 px-6 py-4 border-b grid grid-cols-3 gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-slate-800">{activeInvoices.length}</div>
-                  <div className="text-xs text-slate-500">Total</div>
+            {/* Filters Row */}
+            <div className="px-4 sm:px-6 py-3 bg-slate-50 border-b space-y-2">
+              {/* Year + Search + Sort */}
+              <div className="flex gap-2">
+                {/* Year Dropdown */}
+                <select
+                  value={historyYear}
+                  onChange={(e) => {
+                    setHistoryYear(e.target.value === 'all' ? 'all' : parseInt(e.target.value));
+                    resetHistoryPage();
+                  }}
+                  className="px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="all">All Years</option>
+                  {availableYears.map(year => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+
+                {/* Search */}
+                <div className="flex-1 relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search client name..."
+                    value={historySearch}
+                    onChange={(e) => {
+                      setHistorySearch(e.target.value);
+                      resetHistoryPage();
+                    }}
+                    className="w-full pl-9 pr-8 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  {historySearch && (
+                    <button
+                      onClick={() => {
+                        setHistorySearch('');
+                        resetHistoryPage();
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-emerald-600">
-                    {activeInvoices.filter(i => i.status === 'paid').length}
-                  </div>
-                  <div className="text-xs text-slate-500">Paid</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-amber-600">
-                    RM {activeInvoices.reduce((sum, inv) => sum + inv.total, 0).toLocaleString()}
-                  </div>
-                  <div className="text-xs text-slate-500">Total Value</div>
-                </div>
+
+                {/* Sort */}
+                <select
+                  value={historySort}
+                  onChange={(e) => setHistorySort(e.target.value as typeof historySort)}
+                  className="px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="date-desc">Newest First</option>
+                  <option value="date-asc">Oldest First</option>
+                  <option value="amount-desc">Highest Amount</option>
+                  <option value="amount-asc">Lowest Amount</option>
+                </select>
               </div>
-            )}
+            </div>
+
+            {/* Status Tabs */}
+            <div className="flex border-b overflow-x-auto">
+              {(['all', 'draft', 'sent', 'paid', 'deleted'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => {
+                    setHistoryTab(tab);
+                    resetHistoryPage();
+                  }}
+                  className={`flex-shrink-0 py-2.5 px-4 text-sm font-medium transition-colors whitespace-nowrap ${
+                    historyTab === tab
+                      ? tab === 'deleted'
+                        ? 'text-red-600 border-b-2 border-red-500 bg-red-50'
+                        : tab === 'paid'
+                        ? 'text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50'
+                        : tab === 'sent'
+                        ? 'text-blue-600 border-b-2 border-blue-500 bg-blue-50'
+                        : 'text-amber-600 border-b-2 border-amber-500 bg-amber-50'
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)} ({statusCounts[tab]})
+                </button>
+              ))}
+            </div>
 
             {/* Invoice List */}
-            <div className="flex-1 overflow-y-auto">
-              {savedInvoices.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-400">
+            <div className="flex-1 overflow-y-auto" onClick={() => setHistoryWhatsAppMenu(null)}>
+              {filteredInvoices.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8">
                   <FileText className="w-16 h-16 mb-4" />
-                  <p className="text-lg">No saved invoices yet</p>
-                  <p className="text-sm">Create and save your first invoice!</p>
+                  <p className="text-lg">No invoices found</p>
+                  <p className="text-sm text-center">
+                    {historySearch
+                      ? `No results for "${historySearch}"`
+                      : savedInvoices.length === 0
+                      ? 'Create and save your first invoice!'
+                      : 'Try adjusting your filters'}
+                  </p>
                 </div>
               ) : (
                 <div className="divide-y">
-                  {visibleInvoices.map((invoice) => (
+                  {paginatedInvoices.map((invoice) => (
                     <div key={invoice.id} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                               invoice.documentType === 'quotation'
                                 ? 'bg-blue-100 text-blue-700'
@@ -1893,56 +2065,176 @@ export default function InvoiceGenerator() {
                             }`}>
                               {invoice.documentType === 'quotation' ? 'QUO' : 'INV'}
                             </span>
-                            <span className="font-semibold text-slate-800">{invoice.invoiceNumber}</span>
+                            <span className="font-semibold text-slate-800 text-sm">{invoice.invoiceNumber}</span>
+                            <select
+                              value={invoice.status}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => updateInvoiceStatusLocal(invoice.invoiceNumber, e.target.value as StoredInvoice['status'])}
+                              className={`text-xs px-2 py-0.5 rounded-full font-medium border-0 cursor-pointer ${
+                                invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
+                                invoice.status === 'sent' ? 'bg-blue-100 text-blue-700' :
+                                invoice.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                                'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              <option value="draft">Draft</option>
+                              <option value="sent">Sent</option>
+                              <option value="paid">Paid</option>
+                              <option value="cancelled">Cancelled</option>
+                            </select>
                           </div>
-                          <p className="text-slate-600 font-medium mt-1">{invoice.clientName || 'Unnamed Client'}</p>
+                          <p className="text-slate-800 font-medium mt-1 truncate">{invoice.clientName || 'Unnamed Client'}</p>
+                          <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3 h-3" />
+                              {invoice.eventDate ? new Date(invoice.eventDate).toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No date'}
+                            </span>
+                            {invoice.depositPaid > 0 && (
+                              <span className="text-emerald-600">RM {invoice.depositPaid} paid</span>
+                            )}
+                          </div>
+                          {/* Missing info badges - action items */}
+                          {(!invoice.clientPhone || !invoice.eventVenue || (invoice.documentType === 'invoice' && !invoice.depositPaid)) && (
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              {!invoice.clientPhone && (
+                                <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full" title="Missing phone number">
+                                  <Phone className="w-3 h-3" />
+                                  <span className="hidden sm:inline">No phone</span>
+                                </span>
+                              )}
+                              {!invoice.eventVenue && (
+                                <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded-full" title="Missing venue">
+                                  <MapPin className="w-3 h-3" />
+                                  <span className="hidden sm:inline">No venue</span>
+                                </span>
+                              )}
+                              {invoice.documentType === 'invoice' && !invoice.depositPaid && (
+                                <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-600 rounded-full" title="No deposit paid">
+                                  <DollarSign className="w-3 h-3" />
+                                  <span className="hidden sm:inline">No deposit</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right">
-                          <div className="font-bold text-amber-600">RM {invoice.total.toFixed(2)}</div>
-                          <select
-                            value={invoice.status}
-                            onChange={(e) => updateInvoiceStatusLocal(invoice.invoiceNumber, e.target.value as StoredInvoice['status'])}
-                            className={`text-xs mt-1 px-2 py-1 rounded-full border-0 font-medium ${
-                              invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
-                              invoice.status === 'sent' ? 'bg-blue-100 text-blue-700' :
-                              invoice.status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                              'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            <option value="draft">Draft</option>
-                            <option value="sent">Sent</option>
-                            <option value="paid">Paid</option>
-                            <option value="cancelled">Cancelled</option>
-                          </select>
+                        <div className="text-right ml-3">
+                          <div className="font-bold text-amber-600">RM {invoice.total.toFixed(0)}</div>
+                          {invoice.status !== 'paid' && invoice.total - invoice.depositPaid > 0 && (
+                            <div className="text-xs text-slate-500">
+                              Bal: RM {(invoice.total - invoice.depositPaid).toFixed(0)}
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-4 text-xs text-slate-500 mb-3">
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {invoice.eventDate ? new Date(invoice.eventDate).toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No date'}
-                        </span>
-                        <span>{invoice.eventType}</span>
-                        {invoice.linkedQuotationNumber && (
-                          <span className="text-blue-500">
-                            ← from {invoice.linkedQuotationNumber}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {historyTab === 'active' ? (
+                      {/* Quick Actions */}
+                      <div className="flex items-center gap-2 mt-3 flex-wrap">
+                        {historyTab !== 'deleted' ? (
                           <>
                             <button
                               onClick={() => loadInvoice(invoice)}
-                              className="flex-1 flex items-center justify-center gap-2 text-amber-600 hover:bg-amber-50 py-2 px-3 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
+                              className="flex items-center gap-1.5 text-amber-600 hover:bg-amber-50 py-1.5 px-3 rounded-lg border border-amber-200 text-xs font-medium transition-colors"
                             >
-                              <ChevronRight className="w-4 h-4" />
-                              Load & Edit
+                              <FileText className="w-3.5 h-3.5" />
+                              Load
                             </button>
+                            {/* WhatsApp dropdown with templates - only show if phone exists */}
+                            {invoice.clientPhone && (
+                              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => setHistoryWhatsAppMenu(historyWhatsAppMenu === invoice.invoiceNumber ? null : invoice.invoiceNumber)}
+                                  className="flex items-center gap-1.5 text-green-600 hover:bg-green-50 py-1.5 px-3 rounded-lg border border-green-200 text-xs font-medium transition-colors"
+                                >
+                                  <MessageCircle className="w-3.5 h-3.5" />
+                                  WhatsApp
+                                  <ChevronRight className={`w-3 h-3 transition-transform ${historyWhatsAppMenu === invoice.invoiceNumber ? 'rotate-90' : ''}`} />
+                                </button>
+                                {historyWhatsAppMenu === invoice.invoiceNumber && (
+                                  <div className="absolute left-0 top-full mt-1 w-52 bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50">
+                                    {messageTemplates.map((template) => (
+                                      <button
+                                        key={template.id}
+                                        onClick={() => {
+                                          const deposit = Math.round(invoice.total * (siteConfig.terms.depositPercent / 100));
+                                          const eventTimeStr = `${invoice.eventTimeHour}:${invoice.eventTimeMinute} ${invoice.eventTimePeriod}`;
+                                          const balanceDueDate = invoice.eventDate
+                                            ? new Date(new Date(invoice.eventDate).setDate(new Date(invoice.eventDate).getDate() - siteConfig.terms.balanceDueDays)).toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+                                            : `${siteConfig.terms.balanceDueDays} days before event`;
+
+                                          let message = '';
+                                          switch (template.id) {
+                                            case 'quotation':
+                                              message = generateQuotationMessage({
+                                                clientName: invoice.clientName || 'Client',
+                                                eventDate: invoice.eventDate || 'TBC',
+                                                eventTime: eventTimeStr,
+                                                venue: invoice.eventVenue || 'TBC',
+                                                packageName: invoice.items[0]?.description || 'Performance Package',
+                                                total: invoice.total,
+                                                deposit,
+                                                invoiceNumber: invoice.invoiceNumber,
+                                              });
+                                              break;
+                                            case 'confirmation':
+                                              message = generateConfirmationMessage({
+                                                clientName: invoice.clientName || 'Client',
+                                                eventDate: invoice.eventDate || 'TBC',
+                                                eventTime: eventTimeStr,
+                                                venue: invoice.eventVenue || 'TBC',
+                                                depositAmount: invoice.depositPaid,
+                                                balanceAmount: invoice.total - invoice.depositPaid,
+                                              });
+                                              break;
+                                            case 'balance':
+                                              message = generateBalanceReminderMessage({
+                                                clientName: invoice.clientName || 'Client',
+                                                eventDate: invoice.eventDate || 'TBC',
+                                                eventTime: eventTimeStr,
+                                                venue: invoice.eventVenue || 'TBC',
+                                                balanceAmount: invoice.total - invoice.depositPaid,
+                                                dueDate: balanceDueDate,
+                                              });
+                                              break;
+                                            case 'songs':
+                                              message = generateSongConfirmationMessage({
+                                                clientName: invoice.clientName || 'Client',
+                                                eventDate: invoice.eventDate || 'TBC',
+                                                currentSongs: invoice.items.map(item => item.description).filter(Boolean),
+                                              });
+                                              break;
+                                            case 'thankyou':
+                                              message = generateThankYouMessage({
+                                                clientName: invoice.clientName || 'Client',
+                                                eventType: invoice.eventType || 'event',
+                                                eventDate: invoice.eventDate || 'your special day',
+                                              });
+                                              break;
+                                          }
+                                          openWhatsAppWithMessage(invoice.clientPhone, message);
+                                          setHistoryWhatsAppMenu(null);
+                                        }}
+                                        className="w-full text-left px-3 py-2.5 hover:bg-green-50 transition-colors"
+                                      >
+                                        <div className="text-xs font-medium text-slate-800">{template.name}</div>
+                                        <div className="text-[10px] text-slate-500">{template.description}</div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {invoice.status !== 'paid' && (
+                              <button
+                                onClick={() => updateInvoiceStatusLocal(invoice.invoiceNumber, 'paid')}
+                                className="flex items-center gap-1.5 text-emerald-600 hover:bg-emerald-50 py-1.5 px-3 rounded-lg border border-emerald-200 text-xs font-medium transition-colors"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                Mark Paid
+                              </button>
+                            )}
                             <button
                               onClick={() => deleteInvoice(invoice.invoiceNumber)}
-                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors ml-auto"
                               title="Move to Deleted"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1952,17 +2244,17 @@ export default function InvoiceGenerator() {
                           <>
                             <button
                               onClick={() => restoreInvoice(invoice.invoiceNumber)}
-                              className="flex-1 flex items-center justify-center gap-2 text-emerald-600 hover:bg-emerald-50 py-2 px-3 rounded-lg border border-emerald-200 text-sm font-medium transition-colors"
+                              className="flex items-center gap-1.5 text-emerald-600 hover:bg-emerald-50 py-1.5 px-3 rounded-lg border border-emerald-200 text-xs font-medium transition-colors"
                             >
-                              <RefreshCw className="w-4 h-4" />
+                              <RefreshCw className="w-3.5 h-3.5" />
                               Restore
                             </button>
                             <button
                               onClick={() => permanentlyDeleteInvoice(invoice.invoiceNumber)}
-                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              title="Permanently Delete"
+                              className="flex items-center gap-1.5 text-red-600 hover:bg-red-50 py-1.5 px-3 rounded-lg border border-red-200 text-xs font-medium transition-colors"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete Forever
                             </button>
                           </>
                         )}
@@ -1973,8 +2265,34 @@ export default function InvoiceGenerator() {
               )}
             </div>
 
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="bg-slate-50 px-4 sm:px-6 py-3 border-t flex items-center justify-between">
+                <button
+                  onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                  disabled={historyPage === 1}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Prev
+                </button>
+                <div className="text-sm text-slate-600">
+                  Page <span className="font-semibold">{historyPage}</span> of <span className="font-semibold">{totalPages}</span>
+                  <span className="text-slate-400 ml-2">({filteredInvoices.length} items)</span>
+                </div>
+                <button
+                  onClick={() => setHistoryPage(p => Math.min(totalPages, p + 1))}
+                  disabled={historyPage === totalPages}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             {/* Panel Footer */}
-            <div className="bg-slate-50 px-6 py-4 border-t text-center text-xs text-slate-500">
+            <div className="bg-slate-100 px-4 sm:px-6 py-3 border-t text-center text-xs text-slate-500">
               {isGoogleSyncEnabled() ? (
                 <span className="flex items-center justify-center gap-1">
                   <Cloud className="w-3 h-3" />
@@ -2186,5 +2504,18 @@ export default function InvoiceGenerator() {
         }
       `}</style>
     </div>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function InvoiceGenerator() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center">
+        <div className="text-slate-500">Loading...</div>
+      </div>
+    }>
+      <InvoiceGeneratorContent />
+    </Suspense>
   );
 }
