@@ -27,6 +27,7 @@ interface PackageItem {
   popular?: boolean;
   songs?: string;
   duration?: string;
+  hidden?: boolean;
 }
 
 interface AddonItem {
@@ -313,6 +314,7 @@ export default function AdminSettings() {
       popular: false,
       songs: '',
       duration: '1 hour',
+      hidden: false,
     }]);
   };
 
@@ -740,6 +742,11 @@ export default function AdminSettings() {
                                 <Star className="w-3 h-3" /> Popular
                               </span>
                             )}
+                            {pkg.hidden && (
+                              <span className="flex items-center gap-1 bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded-full">
+                                <EyeOff className="w-3 h-3" /> Hidden
+                              </span>
+                            )}
                           </div>
                           <button
                             onClick={() => removePackage(pkg.id)}
@@ -822,16 +829,30 @@ export default function AdminSettings() {
                             />
                           </div>
 
-                          {/* Row 6: Popular Toggle */}
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={pkg.popular || false}
-                              onChange={(e) => updatePackage(pkg.id, 'popular', e.target.checked)}
-                              className="w-4 h-4 text-amber-500 rounded focus:ring-amber-500"
-                            />
-                            <span className="text-sm text-slate-600">Mark as Popular (highlighted on website)</span>
-                          </label>
+                          {/* Row 6: Popular & Hidden Toggles */}
+                          <div className="flex flex-wrap gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={pkg.popular || false}
+                                onChange={(e) => updatePackage(pkg.id, 'popular', e.target.checked)}
+                                className="w-4 h-4 text-amber-500 rounded focus:ring-amber-500"
+                              />
+                              <span className="text-sm text-slate-600">Mark as Popular</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={pkg.hidden || false}
+                                onChange={(e) => updatePackage(pkg.id, 'hidden', e.target.checked)}
+                                className="w-4 h-4 text-slate-500 rounded focus:ring-slate-500"
+                              />
+                              <span className="text-sm text-slate-600 flex items-center gap-1">
+                                <EyeOff className="w-3 h-3" />
+                                Hidden from website
+                              </span>
+                            </label>
+                          </div>
                         </div>
                       </div>
                     ))

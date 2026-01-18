@@ -39,6 +39,7 @@ export interface CloudPackage {
   popular?: boolean;
   songs?: string;
   duration?: string;
+  hidden?: boolean;
 }
 
 export interface CloudAddon {
@@ -118,6 +119,7 @@ export const getDefaultPackages = (): CloudPackage[] =>
     popular: pkg.popular || false,
     songs: pkg.songs || '',
     duration: pkg.duration || '',
+    hidden: pkg.hidden || false,
   }));
 
 /**

@@ -68,6 +68,7 @@ interface StoredInvoice {
   createdAt: string;
   status: 'draft' | 'sent' | 'paid' | 'cancelled';
   linkedQuotationNumber?: string; // Original quotation number when converted to invoice
+  linkedQuotation?: string; // Same field but from Google Sheets (column header "Linked Quotation")
   convertedAt?: string; // When quotation was converted to invoice
   deletedAt?: string; // Soft delete timestamp
   leadSource?: LeadSource;
@@ -124,8 +125,31 @@ function InvoiceGeneratorContent() {
     }
   };
 
-  // Apply all filters
-  const activeInvoices = savedInvoices.filter(inv => !inv.deletedAt);
+  // Get quotation numbers that have been converted to invoices
+  // These should be hidden from history to avoid confusion
+  // Note: Google Sheets uses "linkedQuotation" (from header "Linked Quotation")
+  // while localStorage uses "linkedQuotationNumber" - check both
+  const invoicesWithLinkedQuotation = savedInvoices.filter(
+    inv => inv.documentType === 'invoice' && (inv.linkedQuotationNumber || inv.linkedQuotation)
+  );
+
+
+  const convertedQuotationNumbers = new Set(
+    invoicesWithLinkedQuotation
+      .map(inv => inv.linkedQuotationNumber || inv.linkedQuotation)
+      .filter((num): num is string => !!num)
+  );
+
+
+  // Apply all filters - exclude quotations that have been converted to invoices
+  const activeInvoices = savedInvoices.filter(inv => {
+    if (inv.deletedAt) return false;
+    // Hide quotations that have been converted to invoices
+    if (inv.documentType === 'quotation' && convertedQuotationNumbers.has(inv.invoiceNumber)) {
+      return false;
+    }
+    return true;
+  });
   const deletedInvoices = savedInvoices.filter(inv => inv.deletedAt);
 
   // Helper to filter by year
@@ -681,13 +705,35 @@ function InvoiceGeneratorContent() {
     setLatestNumbers(null);
   };
 
-  // Convert quotation to invoice (updates same record, no duplicate)
-  const convertToInvoice = () => {
+  // Convert quotation to invoice (uses next available invoice number, not naive rename)
+  const convertToInvoice = async () => {
     if (documentType !== 'quotation') return;
 
     const originalQuoNumber = invoiceNumber;
-    const numPart = invoiceNumber.split('-').pop() || '001';
-    const newInvoiceNumber = `INV-${new Date().getFullYear()}-${numPart}`;
+
+    // Get the next available invoice number (NOT just renaming QUO to INV)
+    let newInvoiceNumber: string;
+
+    if (latestNumbers?.nextInvoice) {
+      // Use cached latest numbers
+      newInvoiceNumber = latestNumbers.nextInvoice;
+    } else if (isGoogleSyncEnabled()) {
+      // Fetch fresh from Google Sheets
+      const result = await fetchLatestInvoiceNumber();
+      if (result.success) {
+        newInvoiceNumber = result.nextInvoice;
+        setLatestNumbers({
+          nextQuotation: result.nextQuotation,
+          nextInvoice: result.nextInvoice,
+        });
+      } else {
+        // Fallback: calculate from local data
+        newInvoiceNumber = getNextLocalInvoiceNumber();
+      }
+    } else {
+      // Fallback: calculate from local data
+      newInvoiceNumber = getNextLocalInvoiceNumber();
+    }
 
     setLinkedQuotationNumber(originalQuoNumber);
     setInvoiceNumber(newInvoiceNumber);
@@ -696,6 +742,17 @@ function InvoiceGeneratorContent() {
 
     // Auto-set deposit as paid (client confirmed)
     setDepositPaid(Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)));
+  };
+
+  // Helper: Get next invoice number from local data
+  const getNextLocalInvoiceNumber = (): string => {
+    const year = new Date().getFullYear();
+    const prefix = `INV-${year}-`;
+    const existingNumbers = savedInvoices
+      .filter(inv => inv.invoiceNumber.startsWith(prefix) && !inv.deletedAt)
+      .map(inv => parseInt(inv.invoiceNumber.split('-').pop() || '0'));
+    const nextNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+    return `${prefix}${String(nextNum).padStart(3, '0')}`;
   };
 
   // Start new document (clear form)
@@ -752,7 +809,8 @@ function InvoiceGeneratorContent() {
   // Load invoice from history
   const loadInvoice = useCallback((invoice: StoredInvoice) => {
     setCurrentLoadedId(invoice.id);
-    setLinkedQuotationNumber(invoice.linkedQuotationNumber || null);
+    // Handle both field names (localStorage uses linkedQuotationNumber, Google Sheets uses linkedQuotation)
+    setLinkedQuotationNumber(invoice.linkedQuotationNumber || invoice.linkedQuotation || null);
     setDocumentType(invoice.documentType);
     setInvoiceNumber(invoice.invoiceNumber);
     setCurrentStatus(invoice.status);

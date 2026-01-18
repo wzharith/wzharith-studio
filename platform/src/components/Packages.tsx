@@ -15,8 +15,11 @@ export default function Packages() {
   const { packages: cloudPackages, addons: cloudAddons, isLoading } = useCloudConfig();
 
   // Determine which data to use based on feature flag
-  const packages = useCloud ? cloudPackages : getDefaultPackages();
+  const allPackages = useCloud ? cloudPackages : getDefaultPackages();
   const addons = useCloud ? cloudAddons : getDefaultAddons();
+
+  // Filter out hidden packages for public display
+  const packages = allPackages.filter(pkg => !pkg.hidden);
 
   return (
     <section id="packages" className="py-24 px-6 relative" ref={ref}>

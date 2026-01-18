@@ -285,7 +285,8 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           status: (['draft', 'sent', 'paid', 'cancelled'].includes(String(inv.status))
             ? inv.status
             : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
-          linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
+          // Fix: Google Sheets column "Linked Quotation" becomes "linkedQuotation" in camelCase
+          linkedQuotationNumber: (inv.linkedQuotation || inv.linkedQuotationNumber) ? String(inv.linkedQuotation || inv.linkedQuotationNumber) : undefined,
           convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
           deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
           // Lead source tracking

@@ -64,6 +64,7 @@ interface PackageConfig {
   popular?: boolean;
   songs?: string;
   duration?: string;
+  hidden?: boolean;
 }
 
 interface AddonConfig {
