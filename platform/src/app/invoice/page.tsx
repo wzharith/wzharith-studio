@@ -14,6 +14,7 @@ import {
   isGoogleSyncEnabled,
   fetchInvoicesFromCloud,
   fetchLatestInvoiceNumber,
+  migrateInvoiceStatus,
   type StoredInvoice as GoogleStoredInvoice,
   type SyncStatus,
 } from '@/lib/google-sync';
@@ -46,6 +47,22 @@ interface InvoiceItem {
 
 type LeadSource = 'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | '';
 
+// Enhanced status system for accurate workflow tracking
+type InvoiceStatus =
+  | 'quotation_draft'    // Initial quote created
+  | 'quotation_sent'     // Quote sent to client
+  | 'deposit_received'   // Deposit paid, booking confirmed
+  | 'invoice_sent'       // Invoice sent after deposit
+  | 'balance_paid'       // Full payment received
+  | 'completed'          // Event performed
+  | 'archived'           // Feedback collected, case closed
+  | 'cancelled'          // Cancelled at any stage
+  // Legacy statuses for backward compatibility
+  | 'draft' | 'sent' | 'paid';
+
+type PaymentStatus = 'none' | 'deposit' | 'partial' | 'full';
+type FeedbackStatus = 'pending' | 'requested' | 'received' | 'reviewed';
+
 interface StoredInvoice {
   id: string;
   invoiceNumber: string;
@@ -63,16 +80,30 @@ interface StoredInvoice {
   items: InvoiceItem[];
   discount: number;
   discountType: 'amount' | 'percent';
-  depositPaid: number;
+  depositRequested?: number; // Deposit amount requested on quotation
+  depositPaid: number;       // Actual deposit received (on invoice)
   total: number;
   createdAt: string;
-  status: 'draft' | 'sent' | 'paid' | 'cancelled';
+  status: InvoiceStatus;
   linkedQuotationNumber?: string; // Original quotation number when converted to invoice
   linkedQuotation?: string; // Same field but from Google Sheets (column header "Linked Quotation")
   convertedAt?: string; // When quotation was converted to invoice
   deletedAt?: string; // Soft delete timestamp
   leadSource?: LeadSource;
   collaborationPartner?: string;
+
+  // NEW: Payment tracking
+  paymentStatus?: PaymentStatus;
+  depositReceivedDate?: string;
+  balanceReceivedDate?: string;
+
+  // NEW: Lifecycle tracking
+  calendarEventId?: string;
+  calendarCreated?: boolean;
+  invoiceSentDate?: string;
+  receiptSentDate?: string;
+  eventCompletedDate?: string;
+  feedbackStatus?: FeedbackStatus;
 }
 
 function InvoiceGeneratorContent() {
@@ -93,7 +124,7 @@ function InvoiceGeneratorContent() {
 
   // History panel
   const [showHistory, setShowHistory] = useState(false);
-  const [historyTab, setHistoryTab] = useState<'all' | 'draft' | 'sent' | 'paid' | 'deleted'>('all');
+  const [historyTab, setHistoryTab] = useState<'all' | 'drafts' | 'sent' | 'deposit' | 'paid' | 'completed' | 'deleted'>('all');
   const [savedInvoices, setSavedInvoices] = useState<StoredInvoice[]>([]);
 
   // History filters - default to current year
@@ -165,11 +196,30 @@ function InvoiceGeneratorContent() {
   const yearFilteredActive = filterByYear(activeInvoices);
   const yearFilteredDeleted = filterByYear(deletedInvoices);
 
+  // Helper: check status categories (handles both legacy and new statuses)
+  // Defined here before usage in filtering
+  const isDraftStatus = (status: InvoiceStatus) =>
+    status === 'draft' || status === 'quotation_draft';
+  const isSentStatus = (status: InvoiceStatus) =>
+    status === 'sent' || status === 'quotation_sent' || status === 'invoice_sent';
+  const isDepositReceivedStatus = (status: InvoiceStatus) =>
+    status === 'deposit_received';
+  const isPaidStatus = (status: InvoiceStatus) =>
+    status === 'paid' || status === 'deposit_received' || status === 'balance_paid';
+  const isCompletedStatus = (status: InvoiceStatus) =>
+    status === 'completed' || status === 'archived';
+  const isFullyPaidStatus = (status: InvoiceStatus) =>
+    status === 'paid' || status === 'balance_paid';
+
   const filteredInvoices = (historyTab === 'deleted' ? yearFilteredDeleted : yearFilteredActive)
     .filter(inv => {
-      // Status filter (for non-deleted)
+      // Status filter (for non-deleted) - use helper functions for new status system
       if (historyTab !== 'deleted' && historyTab !== 'all') {
-        if (inv.status !== historyTab) return false;
+        if (historyTab === 'drafts' && !isDraftStatus(inv.status)) return false;
+        if (historyTab === 'sent' && !isSentStatus(inv.status)) return false;
+        if (historyTab === 'deposit' && !isDepositReceivedStatus(inv.status)) return false;
+        if (historyTab === 'paid' && !isFullyPaidStatus(inv.status)) return false;
+        if (historyTab === 'completed' && !isCompletedStatus(inv.status)) return false;
       }
       // Search filter
       if (historySearch) {
@@ -194,12 +244,14 @@ function InvoiceGeneratorContent() {
   // Reset page when filters change
   const resetHistoryPage = () => setHistoryPage(1);
 
-  // Status counts for tabs - RESPECT YEAR FILTER
+  // Status counts for tabs - RESPECT YEAR FILTER (handles legacy + new statuses)
   const statusCounts = {
     all: yearFilteredActive.length,
-    draft: yearFilteredActive.filter(inv => inv.status === 'draft').length,
-    sent: yearFilteredActive.filter(inv => inv.status === 'sent').length,
-    paid: yearFilteredActive.filter(inv => inv.status === 'paid').length,
+    drafts: yearFilteredActive.filter(inv => isDraftStatus(inv.status)).length,
+    sent: yearFilteredActive.filter(inv => isSentStatus(inv.status)).length,
+    deposit: yearFilteredActive.filter(inv => isDepositReceivedStatus(inv.status)).length,
+    paid: yearFilteredActive.filter(inv => isFullyPaidStatus(inv.status)).length,
+    completed: yearFilteredActive.filter(inv => isCompletedStatus(inv.status)).length,
     deleted: yearFilteredDeleted.length,
   };
 
@@ -207,8 +259,8 @@ function InvoiceGeneratorContent() {
   const summaryStats = {
     total: yearFilteredActive.length,
     totalValue: yearFilteredActive.reduce((sum, inv) => sum + inv.total, 0),
-    collected: yearFilteredActive.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + inv.total, 0),
-    pending: yearFilteredActive.filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled').reduce((sum, inv) => sum + inv.total, 0),
+    collected: yearFilteredActive.filter(inv => isFullyPaidStatus(inv.status)).reduce((sum, inv) => sum + inv.total, 0),
+    pending: yearFilteredActive.filter(inv => !isFullyPaidStatus(inv.status) && inv.status !== 'cancelled').reduce((sum, inv) => sum + inv.total, 0),
     deposits: yearFilteredActive.reduce((sum, inv) => sum + (inv.depositPaid || 0), 0),
   };
 
@@ -245,10 +297,17 @@ function InvoiceGeneratorContent() {
 
       // First, load from localStorage as immediate cache
       const stored = localStorage.getItem(STORAGE_KEY);
-      const localInvoices: StoredInvoice[] = stored ? JSON.parse(stored) : [];
+      const rawLocalInvoices: StoredInvoice[] = stored ? JSON.parse(stored) : [];
+
+      // Apply migration to convert legacy statuses
+      const localInvoices = rawLocalInvoices.map(inv =>
+        migrateInvoiceStatus(inv as GoogleStoredInvoice) as StoredInvoice
+      );
 
       if (localInvoices.length > 0) {
         setSavedInvoices(localInvoices);
+        // Save migrated invoices back to localStorage
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(localInvoices));
       }
 
       // Then try to fetch from cloud
@@ -366,7 +425,16 @@ function InvoiceGeneratorContent() {
   // Document type
   const [documentType, setDocumentType] = useState<'quotation' | 'invoice'>('quotation');
   const [showReceipt, setShowReceipt] = useState(false);
-  const [currentStatus, setCurrentStatus] = useState<StoredInvoice['status']>('draft');
+  const [currentStatus, setCurrentStatus] = useState<StoredInvoice['status']>('quotation_draft');
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('none');
+  const [feedbackStatus, setFeedbackStatus] = useState<FeedbackStatus>('pending');
+  const [calendarCreated, setCalendarCreated] = useState(false);
+  const [calendarEventId, setCalendarEventId] = useState<string | undefined>();
+  const [depositReceivedDate, setDepositReceivedDate] = useState<string | undefined>();
+  const [balanceReceivedDate, setBalanceReceivedDate] = useState<string | undefined>();
+  const [invoiceSentDate, setInvoiceSentDate] = useState<string | undefined>();
+  const [receiptSentDate, setReceiptSentDate] = useState<string | undefined>();
+  const [eventCompletedDate, setEventCompletedDate] = useState<string | undefined>();
 
   // Invoice details
   const [invoiceNumber, setInvoiceNumber] = useState(`QUO-${new Date().getFullYear()}-001`);
@@ -414,7 +482,8 @@ function InvoiceGeneratorContent() {
   const [items, setItems] = useState<InvoiceItem[]>([]);
 
   // Payment
-  const [depositPaid, setDepositPaid] = useState(0);
+  const [depositRequested, setDepositRequested] = useState(0); // For quotations
+  const [depositPaid, setDepositPaid] = useState(0);           // For invoices
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
 
@@ -428,7 +497,7 @@ function InvoiceGeneratorContent() {
   const currentFormState = JSON.stringify({
     clientName, clientPhone, clientEmail, clientAddress,
     eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
-    items, discount, discountType, depositPaid, leadSource, collaborationPartner,
+    items, discount, discountType, depositRequested, depositPaid, leadSource, collaborationPartner,
   });
 
   // Track unsaved changes - compare current form to last saved state
@@ -644,6 +713,7 @@ function InvoiceGeneratorContent() {
       items,
       discount,
       discountType,
+      depositRequested: documentType === 'quotation' ? (depositRequested || undefined) : undefined,
       depositPaid,
       total: totalAfterDiscount,
       createdAt: existingInvoice?.createdAt || new Date().toISOString(),
@@ -652,6 +722,16 @@ function InvoiceGeneratorContent() {
       convertedAt: existingInvoice?.convertedAt || (linkedQuotationNumber ? new Date().toISOString() : undefined),
       leadSource: leadSource || undefined,
       collaborationPartner: ['Collaboration', 'Referral', 'Other'].includes(leadSource) ? collaborationPartner : undefined,
+      // New tracking fields
+      paymentStatus: paymentStatus || 'none',
+      depositReceivedDate: depositReceivedDate,
+      balanceReceivedDate: balanceReceivedDate,
+      calendarEventId: calendarEventId,
+      calendarCreated: calendarCreated,
+      invoiceSentDate: invoiceSentDate,
+      receiptSentDate: receiptSentDate,
+      eventCompletedDate: eventCompletedDate,
+      feedbackStatus: feedbackStatus || 'pending',
     };
 
     let updatedInvoices: StoredInvoice[];
@@ -693,7 +773,7 @@ function InvoiceGeneratorContent() {
     setLastSavedState(JSON.stringify({
       clientName, clientPhone, clientEmail, clientAddress,
       eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
-      items, discount, discountType, depositPaid, leadSource, collaborationPartner,
+      items, discount, discountType, depositRequested, depositPaid, leadSource, collaborationPartner,
     }));
     setHasUnsavedChanges(false);
 
@@ -706,6 +786,7 @@ function InvoiceGeneratorContent() {
   };
 
   // Convert quotation to invoice (uses next available invoice number, not naive rename)
+  // This is typically triggered when deposit is received
   const convertToInvoice = async () => {
     if (documentType !== 'quotation') return;
 
@@ -740,8 +821,18 @@ function InvoiceGeneratorContent() {
     setDocumentType('invoice');
     setInvoiceDate(new Date().toISOString().split('T')[0]);
 
-    // Auto-set deposit as paid (client confirmed)
-    setDepositPaid(Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)));
+    // Auto-set deposit as paid (use depositRequested if set, otherwise calculate from percentage)
+    const deposit = depositRequested > 0
+      ? depositRequested
+      : Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100));
+    setDepositPaid(deposit);
+
+    // Update status and payment tracking (conversion means deposit received)
+    setCurrentStatus('deposit_received');
+    setPaymentStatus('deposit');
+    if (!depositReceivedDate) {
+      setDepositReceivedDate(new Date().toISOString().split('T')[0]);
+    }
   };
 
   // Helper: Get next invoice number from local data
@@ -785,7 +876,7 @@ function InvoiceGeneratorContent() {
     setDocumentType('quotation');
     setInvoiceNumber(nextNumber);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
-    setCurrentStatus('draft');
+    setCurrentStatus('quotation_draft');
     setClientName('');
     setClientPhone('');
     setClientEmail('');
@@ -799,11 +890,22 @@ function InvoiceGeneratorContent() {
     setItems([]);
     setDiscount(0);
     setDiscountType('amount');
+    setDepositRequested(0);
     setDepositPaid(0);
     setCurrentLoadedId(null);
     setLinkedQuotationNumber(null);
     setLeadSource('');
     setCollaborationPartner('');
+    // Reset new tracking fields
+    setPaymentStatus('none');
+    setFeedbackStatus('pending');
+    setCalendarCreated(false);
+    setCalendarEventId(undefined);
+    setDepositReceivedDate(undefined);
+    setBalanceReceivedDate(undefined);
+    setInvoiceSentDate(undefined);
+    setReceiptSentDate(undefined);
+    setEventCompletedDate(undefined);
   };
 
   // Load invoice from history
@@ -830,10 +932,22 @@ function InvoiceGeneratorContent() {
     setItems(invoice.items);
     setDiscount(invoice.discount);
     setDiscountType(invoice.discountType);
+    setDepositRequested(invoice.depositRequested || 0);
     setDepositPaid(invoice.depositPaid);
     setLeadSource(invoice.leadSource || '');
     setCollaborationPartner(invoice.collaborationPartner || '');
     setShowHistory(false);
+
+    // Load new tracking fields
+    setPaymentStatus(invoice.paymentStatus || 'none');
+    setFeedbackStatus(invoice.feedbackStatus || 'pending');
+    setCalendarCreated(invoice.calendarCreated || false);
+    setCalendarEventId(invoice.calendarEventId);
+    setDepositReceivedDate(invoice.depositReceivedDate);
+    setBalanceReceivedDate(invoice.balanceReceivedDate);
+    setInvoiceSentDate(invoice.invoiceSentDate);
+    setReceiptSentDate(invoice.receiptSentDate);
+    setEventCompletedDate(invoice.eventCompletedDate);
 
     // Set last saved state for change tracking
     setLastSavedState(JSON.stringify({
@@ -843,8 +957,11 @@ function InvoiceGeneratorContent() {
       eventTimeHour: invoice.eventTimeHour, eventTimeMinute: invoice.eventTimeMinute,
       eventTimePeriod: invoice.eventTimePeriod, eventVenue: invoice.eventVenue,
       items: invoice.items, discount: invoice.discount, discountType: invoice.discountType,
+      depositRequested: invoice.depositRequested || 0,
       depositPaid: invoice.depositPaid, leadSource: invoice.leadSource || '',
       collaborationPartner: invoice.collaborationPartner || '',
+      paymentStatus: invoice.paymentStatus || 'none',
+      feedbackStatus: invoice.feedbackStatus || 'pending',
     }));
     setHasUnsavedChanges(false);
   }, []);
@@ -1109,10 +1226,102 @@ function InvoiceGeneratorContent() {
         notes: '',
       });
       alert('Calendar event created with reminders!');
+      setCalendarCreated(true);
     } catch (error) {
       alert('Failed to create calendar event.');
       console.error(error);
     }
+  };
+
+  // Handle marking deposit as received
+  const handleMarkDepositReceived = async () => {
+    // Priority: depositPaid > depositRequested > calculated percentage
+    const deposit = depositPaid > 0
+      ? depositPaid
+      : depositRequested > 0
+        ? depositRequested
+        : Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100));
+
+    if (confirm(`Mark deposit of RM ${deposit} as received?\n\nThis will:\n• Set payment status to "Deposit Received"\n• Auto-create calendar event (if not already created)\n• Convert quotation to invoice (if applicable)`)) {
+      // Set deposit amount if not already set
+      if (depositPaid === 0) {
+        setDepositPaid(deposit);
+      }
+
+      // Update payment status
+      setPaymentStatus('deposit');
+      setDepositReceivedDate(new Date().toISOString().split('T')[0]);
+
+      // Update status to deposit_received
+      setCurrentStatus('deposit_received');
+
+      // If this is a quotation, convert to invoice
+      if (documentType === 'quotation') {
+        await convertToInvoice();
+      }
+
+      // Auto-create calendar event if not already created
+      if (!calendarCreated && eventDate && clientName && isGoogleSyncEnabled()) {
+        try {
+          const result = await createCalendarEvent({
+            clientName,
+            clientPhone,
+            clientEmail,
+            eventType,
+            eventDate,
+            eventTime: `${eventTimeHour}:${eventTimeMinute} ${eventTimePeriod}`,
+            venue: eventVenue,
+            packageName: items[0]?.description || '',
+            total: totalAfterDiscount,
+            depositPaid: deposit,
+            invoiceNumber,
+            notes: '',
+          });
+          if (result.success) {
+            setCalendarCreated(true);
+            setCalendarEventId(result.eventId);
+          }
+        } catch (error) {
+          console.error('Failed to create calendar event:', error);
+        }
+      }
+
+      // Auto-save
+      saveInvoice('deposit_received');
+    }
+  };
+
+  // Handle marking balance as paid
+  const handleMarkBalancePaid = () => {
+    if (confirm(`Mark balance of RM ${balanceDue} as paid?\n\nThis will:\n• Set payment status to "Full"\n• Mark as "Fully Paid"`)) {
+      setPaymentStatus('full');
+      setBalanceReceivedDate(new Date().toISOString().split('T')[0]);
+      setCurrentStatus('balance_paid');
+
+      // Auto-save
+      saveInvoice('balance_paid');
+    }
+  };
+
+  // Handle marking event as completed
+  const handleMarkCompleted = () => {
+    if (confirm('Mark event as completed?\n\nThis confirms the performance has been done.')) {
+      setEventCompletedDate(new Date().toISOString().split('T')[0]);
+      setCurrentStatus('completed');
+
+      // Auto-save
+      saveInvoice('completed');
+    }
+  };
+
+  // Handle marking as sent (quotation or invoice)
+  const handleMarkSent = () => {
+    const newStatus = documentType === 'quotation' ? 'quotation_sent' : 'invoice_sent';
+    if (newStatus === 'invoice_sent') {
+      setInvoiceSentDate(new Date().toISOString().split('T')[0]);
+    }
+    setCurrentStatus(newStatus);
+    saveInvoice(newStatus);
   };
 
   // Send WhatsApp message with template
@@ -1393,8 +1602,53 @@ function InvoiceGeneratorContent() {
                 <Printer className="w-4 h-4" />
                 Print
               </button>
-              {/* Contextual buttons */}
-              {documentType === 'quotation' && items.length > 0 && (
+              {/* Contextual workflow buttons */}
+              {/* Mark as Sent (for drafts) */}
+              {(currentStatus === 'quotation_draft' || currentStatus === 'draft') && items.length > 0 && (
+                <button
+                  onClick={handleMarkSent}
+                  className="flex items-center gap-2 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-400 transition-colors text-sm"
+                  title="Mark quotation as sent to client"
+                >
+                  <Send className="w-4 h-4" />
+                  Mark Sent
+                </button>
+              )}
+              {/* Deposit Received button (for quotations that are sent or invoices without deposit) */}
+              {(isSentStatus(currentStatus) || (documentType === 'invoice' && paymentStatus === 'none')) && items.length > 0 && (
+                <button
+                  onClick={handleMarkDepositReceived}
+                  className="flex items-center gap-2 bg-teal-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-teal-400 transition-colors text-sm"
+                  title="Mark deposit as received - converts to invoice and creates calendar"
+                >
+                  <DollarSign className="w-4 h-4" />
+                  Deposit Received
+                </button>
+              )}
+              {/* Balance Paid button (for invoices with deposit but not fully paid) */}
+              {paymentStatus === 'deposit' && balanceDue > 0 && (
+                <button
+                  onClick={handleMarkBalancePaid}
+                  className="flex items-center gap-2 bg-emerald-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-emerald-400 transition-colors text-sm"
+                  title="Mark balance as fully paid"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Balance Paid
+                </button>
+              )}
+              {/* Mark Completed (for paid events) */}
+              {isFullyPaidStatus(currentStatus) && !eventCompletedDate && (
+                <button
+                  onClick={handleMarkCompleted}
+                  className="flex items-center gap-2 bg-purple-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-purple-400 transition-colors text-sm"
+                  title="Mark event as completed"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Completed
+                </button>
+              )}
+              {/* Convert to Invoice (legacy button - now deposit triggers conversion) */}
+              {documentType === 'quotation' && items.length > 0 && !isSentStatus(currentStatus) && currentStatus !== 'quotation_draft' && (
                 <button
                   onClick={convertToInvoice}
                   className="flex items-center gap-2 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-400 transition-colors text-sm"
@@ -1403,6 +1657,7 @@ function InvoiceGeneratorContent() {
                   Convert
                 </button>
               )}
+              {/* Receipt button */}
               {depositPaid > 0 && (
                 <button
                   onClick={handlePrintReceipt}
@@ -1866,9 +2121,26 @@ function InvoiceGeneratorContent() {
                     </select>
                   </div>
                 </div>
+                {/* Deposit Requested - for Quotations */}
+                {documentType === 'quotation' && (
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">Deposit Required (RM)</label>
+                    <input
+                      type="number"
+                      value={depositRequested || ''}
+                      onChange={(e) => setDepositRequested(Number(e.target.value))}
+                      placeholder={(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(0)}
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                    <p className="text-xs text-slate-400 mt-1">
+                      Default {siteConfig.terms.depositPercent}% = RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}
+                    </p>
+                  </div>
+                )}
+                {/* Deposit Paid - for Invoices */}
                 {documentType === 'invoice' && (
                   <div>
-                    <label className="block text-sm text-slate-600 mb-1">Deposit Paid (RM)</label>
+                    <label className="block text-sm text-slate-600 mb-1">Deposit Received (RM)</label>
                     <input
                       type="number"
                       value={depositPaid}
@@ -1878,6 +2150,40 @@ function InvoiceGeneratorContent() {
                     <p className="text-xs text-slate-400 mt-1">{siteConfig.terms.depositPercent}% of total = RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}</p>
                   </div>
                 )}
+
+                {/* Payment Status Indicator */}
+                <div className="pt-2 border-t mt-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-600">Payment Status:</span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      paymentStatus === 'full' ? 'bg-emerald-100 text-emerald-700' :
+                      paymentStatus === 'deposit' ? 'bg-teal-100 text-teal-700' :
+                      paymentStatus === 'partial' ? 'bg-amber-100 text-amber-700' :
+                      'bg-slate-100 text-slate-600'
+                    }`}>
+                      {paymentStatus === 'full' ? '✓ Fully Paid' :
+                       paymentStatus === 'deposit' ? '◐ Deposit Received' :
+                       paymentStatus === 'partial' ? '◔ Partial Payment' :
+                       '○ No Payment'}
+                    </span>
+                  </div>
+                  {depositReceivedDate && (
+                    <p className="text-xs text-teal-600 mt-1">Deposit received: {depositReceivedDate}</p>
+                  )}
+                  {balanceReceivedDate && (
+                    <p className="text-xs text-emerald-600 mt-1">Balance paid: {balanceReceivedDate}</p>
+                  )}
+                  {calendarCreated && (
+                    <p className="text-xs text-blue-600 mt-1 flex items-center gap-1">
+                      <Calendar className="w-3 h-3" /> Calendar event created
+                    </p>
+                  )}
+                  {eventCompletedDate && (
+                    <p className="text-xs text-purple-600 mt-1 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Event completed: {eventCompletedDate}
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -2050,8 +2356,8 @@ function InvoiceGeneratorContent() {
                         <span>RM {totalAfterDiscount.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between py-1 text-xs text-slate-500">
-                        <span>Deposit Required ({siteConfig.terms.depositPercent}%)</span>
-                        <span>RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}</span>
+                        <span>Deposit Required {!depositRequested && `(${siteConfig.terms.depositPercent}%)`}</span>
+                        <span>RM {(depositRequested > 0 ? depositRequested : (totalAfterDiscount * (siteConfig.terms.depositPercent / 100))).toFixed(2)}</span>
                       </div>
                     </>
                   )}
@@ -2301,30 +2607,42 @@ function InvoiceGeneratorContent() {
               </div>
             </div>
 
-            {/* Status Tabs */}
+            {/* Status Tabs - Workflow-based */}
             <div className="flex border-b overflow-x-auto">
-              {(['all', 'draft', 'sent', 'paid', 'deleted'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => {
-                    setHistoryTab(tab);
-                    resetHistoryPage();
-                  }}
-                  className={`flex-shrink-0 py-2.5 px-4 text-sm font-medium transition-colors whitespace-nowrap ${
-                    historyTab === tab
-                      ? tab === 'deleted'
-                        ? 'text-red-600 border-b-2 border-red-500 bg-red-50'
-                        : tab === 'paid'
-                        ? 'text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50'
-                        : tab === 'sent'
-                        ? 'text-blue-600 border-b-2 border-blue-500 bg-blue-50'
-                        : 'text-amber-600 border-b-2 border-amber-500 bg-amber-50'
-                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  {tab.charAt(0).toUpperCase() + tab.slice(1)} ({statusCounts[tab]})
-                </button>
-              ))}
+              {(['all', 'drafts', 'sent', 'deposit', 'paid', 'completed', 'deleted'] as const).map((tab) => {
+                const tabLabels: Record<typeof tab, string> = {
+                  all: 'All',
+                  drafts: 'Drafts',
+                  sent: 'Sent',
+                  deposit: 'Deposit Rec.',
+                  paid: 'Fully Paid',
+                  completed: 'Completed',
+                  deleted: 'Deleted',
+                };
+                const tabColors: Record<typeof tab, string> = {
+                  all: 'text-amber-600 border-b-2 border-amber-500 bg-amber-50',
+                  drafts: 'text-slate-600 border-b-2 border-slate-500 bg-slate-50',
+                  sent: 'text-blue-600 border-b-2 border-blue-500 bg-blue-50',
+                  deposit: 'text-teal-600 border-b-2 border-teal-500 bg-teal-50',
+                  paid: 'text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50',
+                  completed: 'text-purple-600 border-b-2 border-purple-500 bg-purple-50',
+                  deleted: 'text-red-600 border-b-2 border-red-500 bg-red-50',
+                };
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => {
+                      setHistoryTab(tab);
+                      resetHistoryPage();
+                    }}
+                    className={`flex-shrink-0 py-2.5 px-3 text-sm font-medium transition-colors whitespace-nowrap ${
+                      historyTab === tab ? tabColors[tab] : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {tabLabels[tab]} ({statusCounts[tab]})
+                  </button>
+                );
+              })}
             </div>
 
             {/* Invoice List */}
@@ -2361,16 +2679,40 @@ function InvoiceGeneratorContent() {
                               onClick={(e) => e.stopPropagation()}
                               onChange={(e) => updateInvoiceStatusLocal(invoice.invoiceNumber, e.target.value as StoredInvoice['status'])}
                               className={`text-xs px-2 py-0.5 rounded-full font-medium border-0 cursor-pointer ${
-                                invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
-                                invoice.status === 'sent' ? 'bg-blue-100 text-blue-700' :
+                                isCompletedStatus(invoice.status) ? 'bg-purple-100 text-purple-700' :
+                                isFullyPaidStatus(invoice.status) ? 'bg-emerald-100 text-emerald-700' :
+                                isPaidStatus(invoice.status) ? 'bg-teal-100 text-teal-700' :
+                                isSentStatus(invoice.status) ? 'bg-blue-100 text-blue-700' :
                                 invoice.status === 'cancelled' ? 'bg-red-100 text-red-700' :
                                 'bg-slate-100 text-slate-600'
                               }`}
                             >
-                              <option value="draft">Draft</option>
-                              <option value="sent">Sent</option>
-                              <option value="paid">Paid</option>
+                              {/* Quotation statuses */}
+                              {invoice.documentType === 'quotation' && (
+                                <>
+                                  <option value="quotation_draft">Draft</option>
+                                  <option value="quotation_sent">Sent</option>
+                                </>
+                              )}
+                              {/* Invoice/common statuses */}
+                              {invoice.documentType === 'invoice' && (
+                                <>
+                                  <option value="deposit_received">Deposit Received</option>
+                                  <option value="invoice_sent">Invoice Sent</option>
+                                </>
+                              )}
+                              <option value="balance_paid">Fully Paid</option>
+                              <option value="completed">Completed</option>
+                              <option value="archived">Archived</option>
                               <option value="cancelled">Cancelled</option>
+                              {/* Legacy status options for backward compat */}
+                              {(invoice.status === 'draft' || invoice.status === 'sent' || invoice.status === 'paid') && (
+                                <>
+                                  <option value="draft">Draft (legacy)</option>
+                                  <option value="sent">Sent (legacy)</option>
+                                  <option value="paid">Paid (legacy)</option>
+                                </>
+                              )}
                             </select>
                           </div>
                           <p className="text-slate-800 font-medium mt-1 truncate">{invoice.clientName || 'Unnamed Client'}</p>

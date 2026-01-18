@@ -177,6 +177,7 @@ function saveInvoice(invoice) {
     'Subtotal',
     'Discount',
     'Total',
+    'Deposit Requested',
     'Deposit Paid',
     'Balance Due',
     'Items JSON',
@@ -184,6 +185,16 @@ function saveInvoice(invoice) {
     'Updated At',
     'Linked Quotation',
     'Deleted At',
+    // NEW: Enhanced tracking columns
+    'Payment Status',
+    'Deposit Received Date',
+    'Balance Received Date',
+    'Calendar Created',
+    'Calendar Event ID',
+    'Invoice Sent Date',
+    'Receipt Sent Date',
+    'Event Completed Date',
+    'Feedback Status',
   ]);
 
   const data = sheet.getDataRange().getValues();
@@ -237,19 +248,30 @@ function saveInvoice(invoice) {
 
   // Column L (12): Geo Location - SKIP (manually managed as Place chip)
 
-  // Columns M-W (13-23): Lead Source onwards
+  // Columns M onwards: Lead Source and tracking fields
   const rowDataPart2 = [
     leadSourceValue, // Lead Source column
     calculateSubtotal(invoice.items),
     invoice.discount || 0,
     invoice.total,
-    invoice.depositPaid || 0,
+    invoice.depositRequested || 0, // Deposit amount requested (on quotation)
+    invoice.depositPaid || 0,       // Deposit amount received
     invoice.total - (invoice.depositPaid || 0),
     JSON.stringify(invoice.items),
     invoice.createdAt || new Date().toISOString(),
     new Date().toISOString(),
     invoice.linkedQuotationNumber || '',
     invoice.deletedAt || '',
+    // NEW: Enhanced tracking fields
+    invoice.paymentStatus || 'none',
+    invoice.depositReceivedDate || '',
+    invoice.balanceReceivedDate || '',
+    invoice.calendarCreated ? 'TRUE' : 'FALSE',
+    invoice.calendarEventId || '',
+    invoice.invoiceSentDate || '',
+    invoice.receiptSentDate || '',
+    invoice.eventCompletedDate || '',
+    invoice.feedbackStatus || 'pending',
   ];
 
   if (rowIndex > 0) {
@@ -557,7 +579,7 @@ function getInvoices() {
   const invoices = [];
 
   // Date fields that need timezone-safe formatting
-  const dateOnlyFields = ['eventDate']; // Format as YYYY-MM-DD
+  const dateOnlyFields = ['eventDate', 'depositReceivedDate', 'balanceReceivedDate', 'invoiceSentDate', 'receiptSentDate', 'eventCompletedDate']; // Format as YYYY-MM-DD
   const dateTimeFields = ['createdAt', 'updatedAt', 'deletedAt']; // Format with time
 
   for (let i = 1; i < data.length; i++) {

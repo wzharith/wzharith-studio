@@ -13,6 +13,22 @@ if (typeof window !== 'undefined') {
 
 export type LeadSource = 'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | '';
 
+// Enhanced status system for accurate workflow tracking
+export type InvoiceStatus =
+  | 'quotation_draft'    // Initial quote created
+  | 'quotation_sent'     // Quote sent to client
+  | 'deposit_received'   // Deposit paid, booking confirmed
+  | 'invoice_sent'       // Invoice sent after deposit
+  | 'balance_paid'       // Full payment received
+  | 'completed'          // Event performed
+  | 'archived'           // Feedback collected, case closed
+  | 'cancelled'          // Cancelled at any stage
+  // Legacy statuses for backward compatibility
+  | 'draft' | 'sent' | 'paid';
+
+export type PaymentStatus = 'none' | 'deposit' | 'partial' | 'full';
+export type FeedbackStatus = 'pending' | 'requested' | 'received' | 'reviewed';
+
 export interface StoredInvoice {
   id: string;
   invoiceNumber: string;
@@ -30,15 +46,29 @@ export interface StoredInvoice {
   items: InvoiceItem[];
   discount: number;
   discountType: 'amount' | 'percent';
-  depositPaid: number;
+  depositRequested?: number; // NEW: Deposit amount requested on quotation
+  depositPaid: number;       // Actual deposit received (on invoice)
   total: number;
   createdAt: string;
-  status: 'draft' | 'sent' | 'paid' | 'cancelled';
+  status: InvoiceStatus;
   linkedQuotationNumber?: string;
   convertedAt?: string;
   deletedAt?: string; // Soft delete timestamp
   leadSource?: LeadSource;
   collaborationPartner?: string;
+
+  // NEW: Payment tracking
+  paymentStatus?: PaymentStatus;
+  depositReceivedDate?: string;
+  balanceReceivedDate?: string;
+
+  // NEW: Lifecycle tracking
+  calendarEventId?: string;
+  calendarCreated?: boolean;
+  invoiceSentDate?: string;
+  receiptSentDate?: string;
+  eventCompletedDate?: string;
+  feedbackStatus?: FeedbackStatus;
 }
 
 export interface InvoiceItem {
@@ -47,6 +77,52 @@ export interface InvoiceItem {
   details: string;
   quantity: number;
   rate: number;
+}
+
+/**
+ * Migrate legacy status values to new status system
+ * This function should be called when loading invoices to ensure backward compatibility
+ */
+export function migrateInvoiceStatus(invoice: StoredInvoice): StoredInvoice {
+  const migrated = { ...invoice };
+
+  // Migrate legacy statuses to new status system
+  if (invoice.status === 'draft') {
+    if (invoice.documentType === 'quotation') {
+      migrated.status = 'quotation_draft';
+    } else {
+      // Invoice with draft status - likely should be deposit_received
+      migrated.status = 'deposit_received';
+    }
+  } else if (invoice.status === 'sent') {
+    if (invoice.documentType === 'quotation') {
+      migrated.status = 'quotation_sent';
+    } else {
+      migrated.status = 'invoice_sent';
+    }
+  } else if (invoice.status === 'paid') {
+    migrated.status = 'balance_paid';
+    migrated.paymentStatus = 'full';
+  }
+
+  // Infer paymentStatus from depositPaid if not set
+  if (!migrated.paymentStatus || migrated.paymentStatus === 'none') {
+    if (invoice.depositPaid > 0) {
+      const balance = invoice.total - invoice.depositPaid;
+      if (balance <= 0) {
+        migrated.paymentStatus = 'full';
+      } else {
+        migrated.paymentStatus = 'deposit';
+      }
+    }
+  }
+
+  // Infer feedbackStatus if not set
+  if (!migrated.feedbackStatus) {
+    migrated.feedbackStatus = 'pending';
+  }
+
+  return migrated;
 }
 
 export interface CalendarEvent {
@@ -254,12 +330,24 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
         return { success: false, invoices: [], error: 'Invalid JSON: ' + text.substring(0, 100) };
       }
 
+      // Valid status values (including legacy for backward compat)
+      const validStatuses = [
+        'quotation_draft', 'quotation_sent', 'deposit_received', 'invoice_sent',
+        'balance_paid', 'completed', 'archived', 'cancelled',
+        // Legacy statuses
+        'draft', 'sent', 'paid'
+      ];
+
       // The Apps Script returns invoices with camelCase keys
       // Map them to ensure all required fields exist
       const invoices: StoredInvoice[] = (data.invoices || data || []).map((inv: Record<string, unknown>) => {
         // Parse event time from "7:00 PM" format to separate fields
         const eventTimeStr = String(inv.eventTime || '');
         const timeParts = parseEventTime(eventTimeStr);
+
+        // Determine status with fallback for legacy values
+        const rawStatus = String(inv.status || 'quotation_draft');
+        const status = validStatuses.includes(rawStatus) ? rawStatus : 'quotation_draft';
 
         return {
           id: String(inv.id || inv.invoiceNumber || ''),
@@ -279,12 +367,11 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           items: Array.isArray(inv.items) ? inv.items : [],
           discount: Number(inv.discount) || 0,
           discountType: (inv.discountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent',
+          depositRequested: inv.depositRequested ? Number(inv.depositRequested) : undefined,
           depositPaid: Number(inv.depositPaid) || 0,
           total: Number(inv.total) || 0,
           createdAt: String(inv.createdAt || new Date().toISOString()),
-          status: (['draft', 'sent', 'paid', 'cancelled'].includes(String(inv.status))
-            ? inv.status
-            : 'draft') as 'draft' | 'sent' | 'paid' | 'cancelled',
+          status: status as InvoiceStatus,
           // Fix: Google Sheets column "Linked Quotation" becomes "linkedQuotation" in camelCase
           linkedQuotationNumber: (inv.linkedQuotation || inv.linkedQuotationNumber) ? String(inv.linkedQuotation || inv.linkedQuotationNumber) : undefined,
           convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
@@ -292,10 +379,24 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           // Lead source tracking
           leadSource: (inv.leadSource ? String(inv.leadSource) : undefined) as LeadSource | undefined,
           collaborationPartner: inv.collaborationPartner ? String(inv.collaborationPartner) : undefined,
+          // NEW: Payment tracking fields
+          paymentStatus: (inv.paymentStatus ? String(inv.paymentStatus) : 'none') as PaymentStatus,
+          depositReceivedDate: inv.depositReceivedDate ? String(inv.depositReceivedDate) : undefined,
+          balanceReceivedDate: inv.balanceReceivedDate ? String(inv.balanceReceivedDate) : undefined,
+          // NEW: Lifecycle tracking fields
+          calendarCreated: inv.calendarCreated === 'TRUE' || inv.calendarCreated === true,
+          calendarEventId: inv.calendarEventId ? String(inv.calendarEventId) : undefined,
+          invoiceSentDate: inv.invoiceSentDate ? String(inv.invoiceSentDate) : undefined,
+          receiptSentDate: inv.receiptSentDate ? String(inv.receiptSentDate) : undefined,
+          eventCompletedDate: inv.eventCompletedDate ? String(inv.eventCompletedDate) : undefined,
+          feedbackStatus: (inv.feedbackStatus ? String(inv.feedbackStatus) : 'pending') as FeedbackStatus,
         };
       });
 
-      return { success: true, invoices };
+      // Apply migration to convert legacy statuses
+      const migratedInvoices = invoices.map(migrateInvoiceStatus);
+
+      return { success: true, invoices: migratedInvoices };
     }
 
     const errorText = await response.text();

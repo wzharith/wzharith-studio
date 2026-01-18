@@ -172,21 +172,40 @@ export default function Dashboard() {
     });
   }, [activeInvoices, compareYear]);
 
+  // Helper functions for status checks (handles legacy + new statuses)
+  const isDraftStatus = (status: string) =>
+    status === 'draft' || status === 'quotation_draft';
+  const isSentStatus = (status: string) =>
+    status === 'sent' || status === 'quotation_sent' || status === 'invoice_sent';
+  const isDepositReceivedStatus = (status: string) =>
+    status === 'deposit_received' || status === 'invoice_sent' ||
+    status === 'balance_paid' || status === 'completed' || status === 'archived';
+  const isFullyPaidStatus = (status: string) =>
+    status === 'paid' || status === 'balance_paid' || status === 'completed' || status === 'archived';
+  const isCompletedStatus = (status: string) =>
+    status === 'completed' || status === 'archived';
+
   // Calculate stats for selected year
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
-    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid');
-    const pending = yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
+    // Paid = fully paid (handles legacy + new statuses)
+    const paid = yearFilteredInvoices.filter(inv => isFullyPaidStatus(inv.status));
+    // Pending = drafts + sent (not yet deposit received)
+    const pending = yearFilteredInvoices.filter(inv =>
+      isDraftStatus(inv.status) || isSentStatus(inv.status)
+    );
     const quotations = yearFilteredInvoices.filter(inv => inv.documentType === 'quotation');
     const invoicesDocs = yearFilteredInvoices.filter(inv => inv.documentType === 'invoice');
 
-    // Completed events (past dates with paid status)
-    const completedEvents = paid.filter(inv => {
+    // Completed events (past dates with paid/completed status)
+    const completedEvents = yearFilteredInvoices.filter(inv => {
       if (!inv.eventDate) return false;
-      return inv.eventDate < todayStr;
+      const isPastEvent = inv.eventDate < todayStr;
+      const isPaidOrCompleted = isFullyPaidStatus(inv.status) || isCompletedStatus(inv.status);
+      return isPastEvent && isPaidOrCompleted;
     });
 
     // Upcoming: Events with future dates (any status except cancelled)
@@ -207,8 +226,11 @@ export default function Dashboard() {
     const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
     const pendingAmount = pending.reduce((sum, inv) => sum + inv.total, 0);
     const avgInvoiceValue = paid.length > 0 ? Math.round(totalRevenue / paid.length) : 0;
+
+    // Conversion rate: Quotations that became invoices (deposit received)
+    const depositReceived = yearFilteredInvoices.filter(inv => isDepositReceivedStatus(inv.status));
     const conversionRate = quotations.length > 0
-      ? (invoicesDocs.length / quotations.length * 100).toFixed(0)
+      ? (depositReceived.length / quotations.length * 100).toFixed(0)
       : 0;
 
     return {
@@ -229,7 +251,7 @@ export default function Dashboard() {
   const compareStats = useMemo(() => {
     if (!compareYear || compareYearInvoices.length === 0) return null;
 
-    const paid = compareYearInvoices.filter(inv => inv.status === 'paid');
+    const paid = compareYearInvoices.filter(inv => isFullyPaidStatus(inv.status));
     const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
     const avgInvoiceValue = paid.length > 0 ? Math.round(totalRevenue / paid.length) : 0;
 
@@ -441,15 +463,21 @@ export default function Dashboard() {
 
   // Status breakdown for pie chart
   const statusData = useMemo(() => {
-    const draft = yearFilteredInvoices.filter(inv => inv.status === 'draft').length;
-    const sent = yearFilteredInvoices.filter(inv => inv.status === 'sent').length;
-    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid').length;
+    const draft = yearFilteredInvoices.filter(inv => isDraftStatus(inv.status)).length;
+    const sent = yearFilteredInvoices.filter(inv => isSentStatus(inv.status)).length;
+    const depositReceived = yearFilteredInvoices.filter(inv =>
+      inv.status === 'deposit_received' || inv.status === 'invoice_sent'
+    ).length;
+    const fullyPaid = yearFilteredInvoices.filter(inv => isFullyPaidStatus(inv.status)).length;
+    const completed = yearFilteredInvoices.filter(inv => isCompletedStatus(inv.status)).length;
     const cancelled = yearFilteredInvoices.filter(inv => inv.status === 'cancelled').length;
 
     return [
       { name: 'Draft', value: draft, color: '#94a3b8' },
-      { name: 'Sent', value: sent, color: '#f59e0b' },
-      { name: 'Paid', value: paid, color: '#10b981' },
+      { name: 'Sent', value: sent, color: '#60a5fa' },
+      { name: 'Deposit Received', value: depositReceived, color: '#f59e0b' },
+      { name: 'Fully Paid', value: fullyPaid, color: '#10b981' },
+      { name: 'Completed', value: completed, color: '#8b5cf6' },
       { name: 'Cancelled', value: cancelled, color: '#ef4444' },
     ].filter(item => item.value > 0);
   }, [yearFilteredInvoices]);
@@ -460,7 +488,7 @@ export default function Dashboard() {
     const colors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899'];
 
     yearFilteredInvoices
-      .filter(inv => inv.status === 'paid')
+      .filter(inv => isFullyPaidStatus(inv.status))
       .forEach(inv => {
         // Extract package name from items
         const packageItem = inv.items?.find(item =>
@@ -502,18 +530,48 @@ export default function Dashboard() {
       .sort((a, b) => b.count - a.count);
   }, [yearFilteredInvoices]);
 
-  // Conversion funnel data
+  // Conversion funnel data - tracks actual workflow stages
   const conversionData = useMemo(() => {
-    const quotations = yearFilteredInvoices.filter(inv => inv.documentType === 'quotation').length;
-    const invoicesDocs = yearFilteredInvoices.filter(inv => inv.documentType === 'invoice').length;
-    const sent = yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'paid').length;
-    const paid = yearFilteredInvoices.filter(inv => inv.status === 'paid').length;
+    // Stage 1: Quotations created (all quotations)
+    const quotationsCreated = yearFilteredInvoices.filter(inv =>
+      inv.documentType === 'quotation' ||
+      (inv.documentType === 'invoice' && inv.linkedQuotationNumber)
+    ).length;
+
+    // Stage 2: Quotations sent (status beyond draft)
+    const quotesSent = yearFilteredInvoices.filter(inv => {
+      if (inv.documentType === 'quotation') {
+        return !isDraftStatus(inv.status);
+      }
+      // Converted invoices count as sent quotations
+      return inv.documentType === 'invoice' && inv.linkedQuotationNumber;
+    }).length;
+
+    // Stage 3: Deposit received (converted to invoice or deposit_received status)
+    const depositsReceived = yearFilteredInvoices.filter(inv =>
+      inv.documentType === 'invoice' ||
+      isDepositReceivedStatus(inv.status) ||
+      (inv.paymentStatus && inv.paymentStatus !== 'none')
+    ).length;
+
+    // Stage 4: Fully paid (balance received)
+    const fullyPaid = yearFilteredInvoices.filter(inv =>
+      isFullyPaidStatus(inv.status) ||
+      inv.paymentStatus === 'full'
+    ).length;
+
+    // Stage 5: Events completed
+    const eventsCompleted = yearFilteredInvoices.filter(inv =>
+      isCompletedStatus(inv.status) ||
+      inv.eventCompletedDate
+    ).length;
 
     return [
-      { stage: 'Quotations', count: quotations, color: '#94a3b8' },
-      { stage: 'Invoices', count: invoicesDocs, color: '#f59e0b' },
-      { stage: 'Sent/Confirmed', count: sent, color: '#3b82f6' },
-      { stage: 'Paid', count: paid, color: '#10b981' },
+      { stage: 'Quotes Created', count: quotationsCreated, color: '#94a3b8' },
+      { stage: 'Quotes Sent', count: quotesSent, color: '#60a5fa' },
+      { stage: 'Deposit Received', count: depositsReceived, color: '#f59e0b' },
+      { stage: 'Fully Paid', count: fullyPaid, color: '#10b981' },
+      { stage: 'Completed', count: eventsCompleted, color: '#8b5cf6' },
     ];
   }, [yearFilteredInvoices]);
 
