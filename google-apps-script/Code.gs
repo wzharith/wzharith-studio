@@ -172,6 +172,8 @@ function saveInvoice(invoice) {
     'Event Date',
     'Event Time',
     'Venue',
+    'Geo Location',
+    'Lead Source',
     'Subtotal',
     'Discount',
     'Total',
@@ -187,19 +189,39 @@ function saveInvoice(invoice) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const invoiceNumCol = headers.indexOf('Invoice Number');
+  const geoLocationCol = headers.indexOf('Geo Location');
 
-  // Find existing row
+  // Find existing row and preserve Geo Location
   let rowIndex = -1;
+  let existingGeoLocation = '';
   for (let i = 1; i < data.length; i++) {
     if (data[i][invoiceNumCol] === invoice.invoiceNumber) {
       rowIndex = i + 1; // Sheet rows are 1-indexed
+      // Preserve existing Geo Location (manually set in Sheets)
+      if (geoLocationCol >= 0 && data[i][geoLocationCol]) {
+        existingGeoLocation = data[i][geoLocationCol];
+      }
       break;
     }
   }
 
   const eventTime = `${invoice.eventTimeHour}:${invoice.eventTimeMinute} ${invoice.eventTimePeriod}`;
 
-  const rowData = [
+  // Build lead source string (combines source and detail if applicable)
+  let leadSourceValue = invoice.leadSource || '';
+  if (invoice.collaborationPartner) {
+    if (invoice.leadSource === 'Collaboration') {
+      leadSourceValue = `Collaboration: ${invoice.collaborationPartner}`;
+    } else if (invoice.leadSource === 'Referral') {
+      leadSourceValue = `Referral: ${invoice.collaborationPartner}`;
+    } else if (invoice.leadSource === 'Other') {
+      leadSourceValue = `Other: ${invoice.collaborationPartner}`;
+    }
+  }
+
+  // Split data to avoid writing to Geo Location column (Place chip type)
+  // Columns A-K (1-11): Invoice data up to Venue
+  const rowDataPart1 = [
     invoice.invoiceNumber,
     invoice.documentType,
     invoice.status || 'draft',
@@ -211,7 +233,13 @@ function saveInvoice(invoice) {
     invoice.eventDate,
     eventTime,
     invoice.eventVenue,
-    '', // Geo Location - manually set in Sheets (place chip column)
+  ];
+
+  // Column L (12): Geo Location - SKIP (manually managed as Place chip)
+
+  // Columns M-W (13-23): Lead Source onwards
+  const rowDataPart2 = [
+    leadSourceValue, // Lead Source column
     calculateSubtotal(invoice.items),
     invoice.discount || 0,
     invoice.total,
@@ -225,11 +253,13 @@ function saveInvoice(invoice) {
   ];
 
   if (rowIndex > 0) {
-    // Update existing
-    sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+    // Update existing - write in two parts, skip column L
+    sheet.getRange(rowIndex, 1, 1, rowDataPart1.length).setValues([rowDataPart1]);
+    sheet.getRange(rowIndex, 13, 1, rowDataPart2.length).setValues([rowDataPart2]);
   } else {
-    // Append new
-    sheet.appendRow(rowData);
+    // Append new - need to insert with placeholder for column L
+    const fullRow = [...rowDataPart1, '', ...rowDataPart2];
+    sheet.appendRow(fullRow);
   }
 
   return { success: true, invoiceNumber: invoice.invoiceNumber };
@@ -561,6 +591,20 @@ function getInvoices() {
         invoice.items = JSON.parse(invoice.itemsJson);
       } catch (e) {
         invoice.items = [];
+      }
+    }
+
+    // Parse Lead Source (may contain "Type: Detail")
+    if (invoice.leadSource) {
+      if (invoice.leadSource.startsWith('Collaboration: ')) {
+        invoice.collaborationPartner = invoice.leadSource.replace('Collaboration: ', '');
+        invoice.leadSource = 'Collaboration';
+      } else if (invoice.leadSource.startsWith('Referral: ')) {
+        invoice.collaborationPartner = invoice.leadSource.replace('Referral: ', '');
+        invoice.leadSource = 'Referral';
+      } else if (invoice.leadSource.startsWith('Other: ')) {
+        invoice.collaborationPartner = invoice.leadSource.replace('Other: ', '');
+        invoice.leadSource = 'Other';
       }
     }
 

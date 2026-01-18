@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home, Search, ChevronLeft, ArrowUpDown, Phone, MapPin, DollarSign, AlertCircle } from 'lucide-react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home, Search, ChevronLeft, ArrowUpDown, Phone, MapPin, DollarSign, AlertCircle, Download } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
@@ -44,6 +44,8 @@ interface InvoiceItem {
   rate: number;
 }
 
+type LeadSource = 'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | '';
+
 interface StoredInvoice {
   id: string;
   invoiceNumber: string;
@@ -68,6 +70,8 @@ interface StoredInvoice {
   linkedQuotationNumber?: string; // Original quotation number when converted to invoice
   convertedAt?: string; // When quotation was converted to invoice
   deletedAt?: string; // Soft delete timestamp
+  leadSource?: LeadSource;
+  collaborationPartner?: string;
 }
 
 function InvoiceGeneratorContent() {
@@ -365,6 +369,15 @@ function InvoiceGeneratorContent() {
   const [clientEmail, setClientEmail] = useState('');
   const [clientAddress, setClientAddress] = useState('');
 
+  // Lead source tracking
+  const [leadSource, setLeadSource] = useState<'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | ''>('');
+  const [collaborationPartner, setCollaborationPartner] = useState('');
+
+  // Smart save - track unsaved changes
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const [lastSavedState, setLastSavedState] = useState<string>('');
+
   // Event details
   const [eventType, setEventType] = useState('Wedding Reception');
   const [eventDate, setEventDate] = useState('');
@@ -386,6 +399,26 @@ function InvoiceGeneratorContent() {
   const discountAmount = discountType === 'percent' ? (subtotal * discount / 100) : discount;
   const totalAfterDiscount = subtotal - discountAmount;
   const balanceDue = totalAfterDiscount - depositPaid;
+
+  // Track unsaved changes by comparing current state to last saved state
+  const currentFormState = JSON.stringify({
+    clientName, clientPhone, clientEmail, clientAddress,
+    eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
+    items, discount, discountType, depositPaid, leadSource, collaborationPartner,
+  });
+
+  // Track unsaved changes - compare current form to last saved state
+  useEffect(() => {
+    // For new invoices (no loaded ID), any data means unsaved changes
+    if (!currentLoadedId && lastSavedState === '') {
+      // New invoice - check if any meaningful data has been entered
+      const hasData = Boolean(clientName) || Boolean(eventDate) || items.length > 0;
+      setHasUnsavedChanges(hasData);
+    } else if (lastSavedState !== '') {
+      // Loaded or previously saved - compare to last state
+      setHasUnsavedChanges(currentFormState !== lastSavedState);
+    }
+  }, [currentFormState, lastSavedState, currentLoadedId, clientName, eventDate, items.length]);
 
   // Format time for display
   const formattedTime = `${eventTimeHour}:${eventTimeMinute} ${eventTimePeriod}`;
@@ -477,8 +510,99 @@ function InvoiceGeneratorContent() {
     }, 100);
   };
 
+  // Generate filename from specific invoice data (for downloading from history)
+  const generateFilenameForInvoice = (inv: StoredInvoice) => {
+    const dateStr = extractDateOnly(inv.eventDate);
+    const cleanClientName = (inv.clientName || 'Client').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '-').substring(0, 30);
+    return `${dateStr}-${cleanClientName}-${inv.invoiceNumber}`;
+  };
+
+  // Download PDF directly (no print dialog)
+  const handleDownloadPDF = async (overrideInvoice?: StoredInvoice) => {
+    const element = document.getElementById('invoice-preview');
+    if (!element) return;
+
+    // Dynamically import html2pdf.js (client-side only)
+    const html2pdf = (await import('html2pdf.js')).default;
+
+    // Use override invoice filename if provided, otherwise use current form
+    const filename = overrideInvoice
+      ? `${generateFilenameForInvoice(overrideInvoice)}.pdf`
+      : `${generateFilename()}.pdf`;
+
+    // Clone the element and prepare for PDF
+    const clone = element.cloneNode(true) as HTMLElement;
+
+    // Remove elements meant to be hidden in print (they have print:hidden class)
+    // Use attribute selector approach since class names are complex
+    clone.querySelectorAll('[class*="print:hidden"]').forEach(el => el.remove());
+
+    // Show elements that should only appear in print (they have hidden print:block)
+    clone.querySelectorAll('[class*="print:block"]').forEach(el => {
+      (el as HTMLElement).style.display = 'block';
+      (el as HTMLElement).classList.remove('hidden');
+    });
+
+    // Also show print:inline elements
+    clone.querySelectorAll('[class*="print:inline"]').forEach(el => {
+      (el as HTMLElement).style.display = 'inline';
+      (el as HTMLElement).classList.remove('hidden');
+    });
+
+    const opt = {
+      margin: [0, 8, 8, 8],
+      filename: filename,
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: {
+        scale: 1.2,
+        useCORS: true,
+        letterRendering: true,
+        windowWidth: 900,
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+    };
+
+    html2pdf().set(opt).from(clone).save();
+  };
+
+  // Download receipt PDF directly
+  const handleDownloadReceiptPDF = async () => {
+    setShowReceipt(true);
+    // Wait for receipt to render
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const element = document.getElementById('receipt-preview');
+    if (!element) {
+      setShowReceipt(false);
+      return;
+    }
+
+    const html2pdf = (await import('html2pdf.js')).default;
+
+    const filename = `${generateFilename()}-RECEIPT.pdf`;
+    const opt = {
+      margin: [5, 5, 5, 5],
+      filename: filename,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' },
+    };
+
+    html2pdf().set(opt).from(element).save();
+    setShowReceipt(false);
+  };
+
   // Save invoice to localStorage
   const saveInvoice = (status: StoredInvoice['status'] = 'draft') => {
+    // Check if updating existing by ID or creating new
+    const existingIndex = currentLoadedId
+      ? savedInvoices.findIndex(inv => inv.id === currentLoadedId)
+      : savedInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
+
+    // Preserve original createdAt if updating existing
+    const existingInvoice = existingIndex >= 0 ? savedInvoices[existingIndex] : null;
+
     const invoice: StoredInvoice = {
       id: currentLoadedId || Date.now().toString(),
       invoiceNumber,
@@ -498,16 +622,13 @@ function InvoiceGeneratorContent() {
       discountType,
       depositPaid,
       total: totalAfterDiscount,
-      createdAt: new Date().toISOString(),
+      createdAt: existingInvoice?.createdAt || new Date().toISOString(),
       status,
       linkedQuotationNumber: linkedQuotationNumber || undefined,
-      convertedAt: linkedQuotationNumber ? new Date().toISOString() : undefined,
+      convertedAt: existingInvoice?.convertedAt || (linkedQuotationNumber ? new Date().toISOString() : undefined),
+      leadSource: leadSource || undefined,
+      collaborationPartner: ['Collaboration', 'Referral', 'Other'].includes(leadSource) ? collaborationPartner : undefined,
     };
-
-    // Check if updating existing by ID or creating new
-    const existingIndex = currentLoadedId
-      ? savedInvoices.findIndex(inv => inv.id === currentLoadedId)
-      : savedInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
 
     let updatedInvoices: StoredInvoice[];
 
@@ -544,7 +665,17 @@ function InvoiceGeneratorContent() {
         });
     }
 
-    alert(`${documentType === 'quotation' ? 'Quotation' : 'Invoice'} saved!`);
+    // Update last saved state for change tracking (no popup alert)
+    setLastSavedState(JSON.stringify({
+      clientName, clientPhone, clientEmail, clientAddress,
+      eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
+      items, discount, discountType, depositPaid, leadSource, collaborationPartner,
+    }));
+    setHasUnsavedChanges(false);
+
+    // Show "Saved!" animation briefly
+    setJustSaved(true);
+    setTimeout(() => setJustSaved(false), 2000);
 
     // Invalidate latest numbers so next "New" gets fresh numbers
     setLatestNumbers(null);
@@ -614,6 +745,8 @@ function InvoiceGeneratorContent() {
     setDepositPaid(0);
     setCurrentLoadedId(null);
     setLinkedQuotationNumber(null);
+    setLeadSource('');
+    setCollaborationPartner('');
   };
 
   // Load invoice from history
@@ -640,7 +773,22 @@ function InvoiceGeneratorContent() {
     setDiscount(invoice.discount);
     setDiscountType(invoice.discountType);
     setDepositPaid(invoice.depositPaid);
+    setLeadSource(invoice.leadSource || '');
+    setCollaborationPartner(invoice.collaborationPartner || '');
     setShowHistory(false);
+
+    // Set last saved state for change tracking
+    setLastSavedState(JSON.stringify({
+      clientName: invoice.clientName, clientPhone: invoice.clientPhone,
+      clientEmail: invoice.clientEmail, clientAddress: invoice.clientAddress,
+      eventType: invoice.eventType, eventDate: invoice.eventDate,
+      eventTimeHour: invoice.eventTimeHour, eventTimeMinute: invoice.eventTimeMinute,
+      eventTimePeriod: invoice.eventTimePeriod, eventVenue: invoice.eventVenue,
+      items: invoice.items, discount: invoice.discount, discountType: invoice.discountType,
+      depositPaid: invoice.depositPaid, leadSource: invoice.leadSource || '',
+      collaborationPartner: invoice.collaborationPartner || '',
+    }));
+    setHasUnsavedChanges(false);
   }, []);
 
   // Auto-load invoice from URL param (e.g., /invoice?load=INV-2026-001)
@@ -1136,33 +1284,42 @@ function InvoiceGeneratorContent() {
                   )}
                 </div>
               )}
-              {/* Save button with sync indicator dot */}
+              {/* Save button with smart save + sync indicator */}
               <button
                 onClick={() => {
-                  saveInvoice('draft');
-                  // Click the dot to retry sync if there's an error
+                  saveInvoice(currentStatus || 'draft');
                 }}
-                disabled={syncStatus === 'syncing'}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors text-sm ${
-                  syncStatus === 'error'
-                    ? 'bg-red-500 text-white hover:bg-red-600'
-                    : 'bg-emerald-500 text-white hover:bg-emerald-400'
+                disabled={syncStatus === 'syncing' || (!hasUnsavedChanges && !justSaved && lastSavedState !== '')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all text-sm ${
+                  justSaved
+                    ? 'bg-emerald-600 text-white'
+                    : syncStatus === 'error'
+                      ? 'bg-red-500 text-white hover:bg-red-600'
+                      : hasUnsavedChanges
+                        ? 'bg-amber-500 text-white hover:bg-amber-400'
+                        : lastSavedState === ''
+                          ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                          : 'bg-slate-400 text-white cursor-not-allowed'
                 }`}
                 title={
-                  syncStatus === 'synced' ? 'Saved & synced to cloud' :
+                  justSaved ? 'Saved!' :
+                  hasUnsavedChanges ? 'Unsaved changes - click to save' :
+                  syncStatus === 'synced' ? 'All changes saved' :
                   syncStatus === 'syncing' ? 'Saving...' :
-                  syncStatus === 'error' ? 'Click to save & retry sync' :
-                  'Save (auto-syncs to cloud)'
+                  syncStatus === 'error' ? 'Error - click to retry' :
+                  'No changes to save'
                 }
               >
                 {syncStatus === 'syncing' ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : justSaved ? (
+                  <CheckCircle className="w-4 h-4" />
                 ) : (
                   <Save className="w-4 h-4" />
                 )}
-                Save
+                {justSaved ? 'Saved!' : hasUnsavedChanges ? 'Save*' : 'Save'}
                 {/* Sync status dot */}
-                {isGoogleSyncEnabled() && (
+                {isGoogleSyncEnabled() && !justSaved && (
                   <span className={`w-2 h-2 rounded-full ml-1 ${
                     syncStatus === 'synced' ? 'bg-green-300' :
                     syncStatus === 'syncing' ? 'bg-yellow-300 animate-pulse' :
@@ -1222,20 +1379,28 @@ function InvoiceGeneratorContent() {
               </button>
               <button
                 type="button"
-                onClick={() => saveInvoice('draft')}
-                disabled={syncStatus === 'syncing'}
-                className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-xs ${
-                  syncStatus === 'error'
-                    ? 'bg-red-500 text-white'
-                    : 'bg-emerald-500 text-white'
+                onClick={() => saveInvoice(currentStatus || 'draft')}
+                disabled={syncStatus === 'syncing' || (!hasUnsavedChanges && !justSaved && lastSavedState !== '')}
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-xs transition-all ${
+                  justSaved
+                    ? 'bg-emerald-600 text-white'
+                    : syncStatus === 'error'
+                      ? 'bg-red-500 text-white'
+                      : hasUnsavedChanges
+                        ? 'bg-amber-500 text-white'
+                        : lastSavedState === ''
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-slate-400 text-white cursor-not-allowed'
                 }`}
               >
                 {syncStatus === 'syncing' ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : justSaved ? (
+                  <CheckCircle className="w-4 h-4" />
                 ) : (
                   <Save className="w-4 h-4" />
                 )}
-                Save
+                {justSaved ? 'Saved!' : hasUnsavedChanges ? 'Save*' : 'Save'}
               </button>
               <button
                 type="button"
@@ -1243,6 +1408,14 @@ function InvoiceGeneratorContent() {
                 className="flex items-center gap-1 bg-amber-500 text-slate-900 px-3 py-2 rounded-lg font-medium text-xs"
               >
                 <Printer className="w-4 h-4" />
+                Print
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDownloadPDF()}
+                className="flex items-center gap-1 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+              >
+                <Download className="w-4 h-4" />
                 PDF
               </button>
             </div>
@@ -1478,6 +1651,65 @@ function InvoiceGeneratorContent() {
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Lead Source</label>
+                  <select
+                    value={leadSource}
+                    onChange={(e) => setLeadSource(e.target.value as typeof leadSource)}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                  >
+                    <option value="">-- Select Source --</option>
+                    <option value="Web">Web</option>
+                    <option value="Instagram">Instagram</option>
+                    <option value="WhatsApp">WhatsApp</option>
+                    <option value="TikTok">TikTok</option>
+                    <option value="Referral">Referral</option>
+                    <option value="Collaboration">Collaboration</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                {leadSource === 'Collaboration' && (
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">Collaboration Partner</label>
+                    <input
+                      type="text"
+                      value={collaborationPartner}
+                      onChange={(e) => setCollaborationPartner(e.target.value)}
+                      placeholder="e.g., Baskara, Primadona, Skyeglass"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      list="collaboration-partners"
+                    />
+                    <datalist id="collaboration-partners">
+                      <option value="Baskara" />
+                      <option value="Primadona" />
+                      <option value="Skyeglass" />
+                    </datalist>
+                  </div>
+                )}
+                {leadSource === 'Referral' && (
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">Referred by</label>
+                    <input
+                      type="text"
+                      value={collaborationPartner}
+                      onChange={(e) => setCollaborationPartner(e.target.value)}
+                      placeholder="Who referred this client?"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                  </div>
+                )}
+                {leadSource === 'Other' && (
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">Specify Source</label>
+                    <input
+                      type="text"
+                      value={collaborationPartner}
+                      onChange={(e) => setCollaborationPartner(e.target.value)}
+                      placeholder="Where did this lead come from?"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1643,16 +1875,16 @@ function InvoiceGeneratorContent() {
                 <table className="w-full mb-6">
                   <thead>
                     <tr className="bg-slate-800 text-white">
-                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider">Description</th>
-                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider w-16">Qty</th>
-                      <th className="text-right py-3 px-4 text-xs uppercase tracking-wider w-24">Rate</th>
-                      <th className="text-right py-3 px-4 text-xs uppercase tracking-wider w-24">Amount</th>
+                      <th className="text-left py-2 px-3 text-xs uppercase tracking-wider" style={{ width: '55%' }}>Description</th>
+                      <th className="text-center py-2 px-2 text-xs uppercase tracking-wider" style={{ width: '10%' }}>Qty</th>
+                      <th className="text-right py-2 px-2 text-xs uppercase tracking-wider" style={{ width: '15%' }}>Rate</th>
+                      <th className="text-right py-2 px-3 text-xs uppercase tracking-wider" style={{ width: '20%' }}>Amount</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.map((item) => (
                       <tr key={item.id} className="border-b border-slate-200">
-                        <td className="py-4 px-4">
+                        <td className="py-4 px-3 align-middle">
                           <div className="print:hidden flex items-start gap-2">
                             <div className="flex-1">
                               <input
@@ -1660,14 +1892,14 @@ function InvoiceGeneratorContent() {
                                 value={item.description}
                                 onChange={(e) => updateItem(item.id, 'description', e.target.value)}
                                 placeholder="Service description"
-                                className="w-full font-medium text-slate-800 border-b border-transparent hover:border-slate-300 focus:border-amber-500 focus:outline-none"
+                                className="w-full font-medium text-slate-800 border-b border-transparent hover:border-slate-300 focus:border-amber-500 focus:outline-none text-sm"
                               />
                               <input
                                 type="text"
                                 value={item.details}
                                 onChange={(e) => updateItem(item.id, 'details', e.target.value)}
                                 placeholder="Additional details"
-                                className="w-full text-sm text-slate-500 border-b border-transparent hover:border-slate-300 focus:border-amber-500 focus:outline-none"
+                                className="w-full text-xs text-slate-500 border-b border-transparent hover:border-slate-300 focus:border-amber-500 focus:outline-none"
                               />
                             </div>
                             <button
@@ -1678,30 +1910,30 @@ function InvoiceGeneratorContent() {
                             </button>
                           </div>
                           <div className="hidden print:block">
-                            <div className="font-medium text-slate-800">{item.description}</div>
-                            {item.details && <div className="text-sm text-slate-500">{item.details}</div>}
+                            <div className="font-medium text-slate-800 text-sm">{item.description}</div>
+                            {item.details && <div className="text-xs text-slate-500 mt-0.5">{item.details}</div>}
                           </div>
                         </td>
-                        <td className="py-4 px-4 text-center">
+                        <td className="py-4 px-2 text-center align-middle" style={{ width: '10%' }}>
                           <input
                             type="number"
                             value={item.quantity}
                             onChange={(e) => updateItem(item.id, 'quantity', Number(e.target.value))}
-                            className="w-12 text-center border rounded px-1 py-1 print:hidden"
+                            className="w-10 text-center border rounded px-1 py-1 print:hidden text-sm"
                           />
-                          <span className="hidden print:inline">{item.quantity}</span>
+                          <span className="hidden print:inline text-sm">{item.quantity}</span>
                         </td>
-                        <td className="py-4 px-4 text-right">
+                        <td className="py-4 px-2 text-right align-middle" style={{ width: '15%' }}>
                           <input
                             type="number"
                             value={item.rate}
                             onChange={(e) => updateItem(item.id, 'rate', Number(e.target.value))}
-                            className="w-20 text-right border rounded px-1 py-1 print:hidden"
+                            className="w-16 text-right border rounded px-1 py-1 print:hidden text-sm"
                           />
-                          <span className="hidden print:inline">{item.rate}</span>
+                          <span className="hidden print:inline text-sm">RM {item.rate.toFixed(2)}</span>
                         </td>
-                        <td className="py-4 px-4 text-right font-medium">
-                          RM {(item.quantity * item.rate).toFixed(2)}
+                        <td className="py-4 px-3 text-right font-medium align-middle" style={{ width: '20%' }}>
+                          <span className="text-sm">RM {(item.quantity * item.rate).toFixed(2)}</span>
                         </td>
                       </tr>
                     ))}
@@ -1713,41 +1945,38 @@ function InvoiceGeneratorContent() {
                 </div>
               )}
 
-              {/* Totals */}
-              <div className="print-section flex justify-end mb-4 sm:mb-8">
-                <div className="w-full sm:w-72">
-                  <div className="flex justify-between py-2 border-b border-slate-200">
+              {/* Totals - Compact */}
+              <div className="print-section flex justify-end mb-3 sm:mb-6">
+                <div className="w-full sm:w-64">
+                  <div className="flex justify-between py-1.5 border-b border-slate-200 text-sm">
                     <span className="text-slate-600">Subtotal</span>
                     <span>RM {subtotal.toFixed(2)}</span>
                   </div>
                   {discount > 0 && (
-                    <div className="flex justify-between py-2 border-b border-slate-200 text-green-600">
-                      <span className="flex items-center gap-1">
-                        <Percent className="w-3 h-3" />
-                        Discount {discountType === 'percent' ? `(${discount}%)` : ''}
-                      </span>
-                      <span>- RM {discountAmount.toFixed(2)}</span>
+                    <div className="flex justify-between py-1 border-b border-slate-200 text-green-600 text-sm">
+                      <span>Discount</span>
+                      <span>-RM {discountAmount.toFixed(2)}</span>
                     </div>
                   )}
                   {discount > 0 && (
-                    <div className="flex justify-between py-2 border-b border-slate-200">
+                    <div className="flex justify-between py-1 border-b border-slate-200 text-sm">
                       <span className="text-slate-600">Total</span>
                       <span>RM {totalAfterDiscount.toFixed(2)}</span>
                     </div>
                   )}
                   {documentType === 'invoice' && (
                     <>
-                      <div className="flex justify-between py-2 border-b border-slate-200">
+                      <div className="flex justify-between py-1 border-b border-slate-200 text-sm">
                         <span className="text-slate-600">Deposit Paid</span>
-                        <span>- RM {depositPaid.toFixed(2)}</span>
+                        <span>-RM {depositPaid.toFixed(2)}</span>
                       </div>
                       {currentStatus === 'paid' ? (
-                        <div className="flex justify-between py-3 border-b-4 border-emerald-500 font-bold text-lg text-emerald-600">
+                        <div className="flex justify-between py-2 border-b-2 border-emerald-500 font-semibold text-emerald-600">
                           <span>Balance Due</span>
-                          <span>RM 0.00 ✓ PAID</span>
+                          <span>RM 0.00 PAID</span>
                         </div>
                       ) : (
-                        <div className="flex justify-between py-3 border-b-4 border-amber-500 font-bold text-lg">
+                        <div className="flex justify-between py-2 border-b-2 border-amber-500 font-semibold">
                           <span>Balance Due</span>
                           <span className={balanceDue < 0 ? 'text-green-600' : ''}>
                             RM {balanceDue.toFixed(2)}
@@ -1758,11 +1987,11 @@ function InvoiceGeneratorContent() {
                   )}
                   {documentType === 'quotation' && (
                     <>
-                      <div className="flex justify-between py-3 border-b-4 border-amber-500 font-bold text-lg">
+                      <div className="flex justify-between py-2 border-b-2 border-amber-500 font-semibold">
                         <span>Total Estimated</span>
                         <span>RM {totalAfterDiscount.toFixed(2)}</span>
                       </div>
-                      <div className="flex justify-between py-2 text-sm text-slate-500">
+                      <div className="flex justify-between py-1 text-xs text-slate-500">
                         <span>Deposit Required ({siteConfig.terms.depositPercent}%)</span>
                         <span>RM {(totalAfterDiscount * (siteConfig.terms.depositPercent / 100)).toFixed(2)}</span>
                       </div>
@@ -1771,47 +2000,50 @@ function InvoiceGeneratorContent() {
                 </div>
               </div>
 
-              {/* Payment Info - Keep together with terms */}
+              {/* Payment Info - Compact for PDF */}
               <div className="print-keep-together">
-                <div className="bg-slate-50 rounded-lg p-4 sm:p-6 mb-4 sm:mb-6 border border-slate-200 print:bg-gray-50 print:border-gray-300">
-                  <h3 className="text-xs uppercase tracking-wider text-amber-600 font-semibold mb-2 sm:mb-3">Payment Details</h3>
-                  <div className="grid grid-cols-2 gap-2 sm:gap-3 text-xs sm:text-sm">
+                <div className="bg-slate-50 rounded-lg p-3 sm:p-4 mb-3 sm:mb-4 border border-slate-200 print:bg-gray-50 print:border-gray-300">
+                  <h3 className="text-[10px] uppercase tracking-wider text-amber-600 font-semibold mb-1.5">Payment Details</h3>
+                  <div className="grid grid-cols-2 gap-1 text-[11px]">
                     <p><strong>Bank:</strong> {siteConfig.banking.bank}</p>
                     <p><strong>Account Name:</strong> {siteConfig.banking.accountName}</p>
                     <p><strong>Account No:</strong> {siteConfig.banking.accountNumber}</p>
-                    <p><strong>Reference:</strong> {extractDateOnly(eventDate).replace(/-/g, '') || 'BOOKING'}-{(clientName || 'CLIENT').split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
+                    <p><strong>Reference:</strong> {extractDateOnly(eventDate).replace(/-/g, '') || 'BOOKING'}-{(clientName || 'CLIENT').split(' ').filter(n => /^[a-zA-Z]/.test(n)).map(n => n[0]).join('').toUpperCase().substring(0, 3)}</p>
                   </div>
                 </div>
 
-                {/* Terms */}
-                <div className="text-xs text-slate-500 mb-4 sm:mb-6">
-                  <h4 className="font-semibold text-slate-700 mb-2">Terms & Conditions</h4>
-                {documentType === 'quotation' ? (
-                  <ul className="list-disc list-inside space-y-0.5">
-                    <li>This quotation is valid for <strong>{siteConfig.terms.quotationValidDays} days</strong> from the date above</li>
-                    <li><strong>Payment:</strong> {siteConfig.terms.paymentMethods}</li>
-                    <li><strong>{siteConfig.terms.depositPercent}% deposit</strong> required to confirm your booking</li>
-                    <li>Balance due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong>. {siteConfig.terms.latePaymentPolicy}</li>
-                    <li>Transport charges apply for venues outside {siteConfig.transport.baseLocation}</li>
-                  </ul>
-                ) : (
-                  <ul className="list-disc list-inside space-y-0.5">
-                    <li><strong>Payment:</strong> {siteConfig.terms.paymentMethods}</li>
-                    <li><strong>Deposit:</strong> {siteConfig.terms.depositPercent}% deposit required to confirm booking</li>
-                    <li><strong>Balance:</strong> Full payment due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong></li>
-                    <li><strong>Late Payment:</strong> {siteConfig.terms.latePaymentPolicy}</li>
-                    <li><strong>Cancellation:</strong> {siteConfig.terms.cancellationPolicy}</li>
-                    <li><strong>Rescheduling:</strong> {siteConfig.terms.reschedulingPolicy}</li>
-                  </ul>
-                )}
+                {/* Terms - Two Column Layout */}
+                <div className="text-[10px] text-slate-500 mb-2">
+                  <h4 className="font-semibold text-slate-700 mb-1.5 text-[11px]">Terms & Conditions</h4>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                    {documentType === 'quotation' ? (
+                      <>
+                        <p>• Valid for {siteConfig.terms.quotationValidDays} days from date above</p>
+                        <p>• Balance due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong></p>
+                        <p>• Payment: {siteConfig.terms.paymentMethods}</p>
+                        <p>• {siteConfig.terms.latePaymentPolicy}</p>
+                        <p>• {siteConfig.terms.depositPercent}% deposit to confirm booking</p>
+                        <p>• Transport charges outside {siteConfig.transport.baseLocation}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p>• Payment: {siteConfig.terms.paymentMethods}</p>
+                        <p>• Balance due by <strong className="text-amber-600">{formattedBalanceDueDate}</strong></p>
+                        <p>• {siteConfig.terms.depositPercent}% deposit to confirm</p>
+                        <p>• {siteConfig.terms.latePaymentPolicy}</p>
+                        <p>• Cancellation: {siteConfig.terms.cancellationPolicy}</p>
+                        <p>• Rescheduling: {siteConfig.terms.reschedulingPolicy}</p>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Footer */}
-              <div className="print-section text-center text-xs text-slate-500 pt-3 sm:pt-4 border-t border-slate-200">
-                <p className="font-semibold text-slate-700">{siteConfig.business.name}</p>
-                <p>📞 {getPhoneDisplay()} | ✉️ {siteConfig.contact.email}{siteConfig.social.instagram ? ` | 📸 @${siteConfig.social.instagram}` : ''}</p>
-                <p className="mt-1 sm:mt-2 text-amber-600">Thank you for your business! 🎷</p>
+              {/* Footer - with breathing room */}
+              <div className="print-section text-center text-[10px] text-slate-500 pt-4 mt-4 border-t border-slate-200">
+                <p className="font-semibold text-slate-700 text-[11px]">{siteConfig.business.name}</p>
+                <p>{getPhoneDisplay()} | {siteConfig.contact.email}{siteConfig.social.instagram ? ` | @${siteConfig.social.instagram}` : ''}</p>
+                <p className="mt-0.5 text-amber-600">Thank you for your business!</p>
               </div>
             </div>
           </div>
@@ -2137,6 +2369,19 @@ function InvoiceGeneratorContent() {
                             >
                               <FileText className="w-3.5 h-3.5" />
                               Load
+                            </button>
+                            <button
+                              onClick={async () => {
+                                // Load the invoice first, then download with correct filename
+                                loadInvoice(invoice);
+                                // Wait for render
+                                await new Promise(resolve => setTimeout(resolve, 400));
+                                handleDownloadPDF(invoice);
+                              }}
+                              className="flex items-center gap-1.5 text-blue-600 hover:bg-blue-50 py-1.5 px-3 rounded-lg border border-blue-200 text-xs font-medium transition-colors"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              PDF
                             </button>
                             {/* WhatsApp dropdown with templates - only show if phone exists */}
                             {invoice.clientPhone && (

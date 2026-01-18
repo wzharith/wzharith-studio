@@ -58,6 +58,10 @@ export default function AdminSettings() {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [addons, setAddons] = useState<AddonItem[]>([]);
 
+  // Collaboration partners state
+  const [collaborationPartners, setCollaborationPartners] = useState<string[]>(['Baskara', 'Primadona', 'Skyeglass']);
+  const [newPartner, setNewPartner] = useState('');
+
   // Config history state
   const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -224,6 +228,12 @@ export default function AdminSettings() {
             ? cloudAddons
             : defaultAddons
         );
+
+        // Load collaboration partners from config
+        const cloudPartners = result.config.collaborationPartners;
+        if (Array.isArray(cloudPartners) && cloudPartners.length > 0) {
+          setCollaborationPartners(cloudPartners);
+        }
       }
     } else {
       // No Google sync - use defaults
@@ -263,11 +273,12 @@ export default function AdminSettings() {
     setIsSaving(true);
     setSaveMessage('');
 
-    // Include packages and addons in config
+    // Include packages, addons, and collaboration partners in config
     const fullConfig = {
       ...config,
       packages,
       addons,
+      collaborationPartners,
     };
 
     const result = await saveConfigToGoogle(fullConfig);
@@ -362,6 +373,7 @@ export default function AdminSettings() {
     { id: 'banking', label: 'Banking', icon: CreditCard },
     { id: 'packages', label: 'Packages', icon: Package },
     { id: 'addons', label: 'Add-ons', icon: DollarSign },
+    { id: 'collaborations', label: 'Collaborations', icon: Star },
     { id: 'transport', label: 'Transport', icon: Truck },
     { id: 'terms', label: 'Terms', icon: FileText },
     { id: 'sync', label: 'Sync', icon: RefreshCw },
@@ -890,6 +902,69 @@ export default function AdminSettings() {
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Collaborations Section */}
+            {activeSection === 'collaborations' && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-slate-800">Collaboration Partners</h2>
+                </div>
+                <p className="text-sm text-slate-500">
+                  Manage your collaboration partners. These will appear as options when selecting &quot;Collaboration&quot; as the lead source.
+                </p>
+
+                {/* Add new partner */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newPartner}
+                    onChange={(e) => setNewPartner(e.target.value)}
+                    placeholder="Enter partner name..."
+                    className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newPartner.trim()) {
+                        setCollaborationPartners([...collaborationPartners, newPartner.trim()]);
+                        setNewPartner('');
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newPartner.trim()) {
+                        setCollaborationPartners([...collaborationPartners, newPartner.trim()]);
+                        setNewPartner('');
+                      }
+                    }}
+                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add
+                  </button>
+                </div>
+
+                {/* Partners list */}
+                <div className="space-y-2">
+                  {collaborationPartners.length === 0 ? (
+                    <p className="text-slate-400 text-center py-8">No collaboration partners added yet</p>
+                  ) : (
+                    collaborationPartners.map((partner, index) => (
+                      <div key={index} className="flex items-center justify-between bg-slate-50 rounded-lg p-3">
+                        <div className="flex items-center gap-3">
+                          <Star className="w-5 h-5 text-amber-500" />
+                          <span className="font-medium text-slate-800">{partner}</span>
+                        </div>
+                        <button
+                          onClick={() => setCollaborationPartners(collaborationPartners.filter((_, i) => i !== index))}
+                          className="text-red-400 hover:text-red-600 p-2"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     ))
                   )}

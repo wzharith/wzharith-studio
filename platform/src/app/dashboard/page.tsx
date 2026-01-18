@@ -40,7 +40,7 @@ import {
   type CalendarEventInfo,
   getCalendarEvents,
 } from '@/lib/google-sync';
-import { RevenueChart, StatusPieChart, PackagePieChart, ConversionFunnelChart } from '@/components/DashboardCharts';
+import { RevenueChart, StatusPieChart, PackagePieChart, ConversionFunnelChart, LeadSourcePieChart, LEAD_SOURCE_COLORS } from '@/components/DashboardCharts';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 
 export default function Dashboard() {
@@ -515,6 +515,59 @@ export default function Dashboard() {
       { stage: 'Sent/Confirmed', count: sent, color: '#3b82f6' },
       { stage: 'Paid', count: paid, color: '#10b981' },
     ];
+  }, [yearFilteredInvoices]);
+
+  // Lead source analytics with sub-category breakdown
+  const leadSourceData = useMemo(() => {
+    const sourceMap: { [key: string]: {
+      count: number;
+      revenue: number;
+      partners: { [partner: string]: { count: number; revenue: number } };
+    } } = {};
+
+    yearFilteredInvoices.forEach(inv => {
+      const source = inv.leadSource || 'Unknown';
+      const partner = inv.collaborationPartner || '';
+      const invoiceValue = inv.total || 0;
+
+      if (!sourceMap[source]) {
+        sourceMap[source] = { count: 0, revenue: 0, partners: {} };
+      }
+      sourceMap[source].count += 1;
+      // Count all invoice values (not just paid) for lead source analysis
+      sourceMap[source].revenue += invoiceValue;
+
+      // Track sub-breakdown for Collaboration, Referral, and Other
+      if ((source === 'Collaboration' || source === 'Referral' || source === 'Other') && partner) {
+        if (!sourceMap[source].partners[partner]) {
+          sourceMap[source].partners[partner] = { count: 0, revenue: 0 };
+        }
+        sourceMap[source].partners[partner].count += 1;
+        sourceMap[source].partners[partner].revenue += invoiceValue;
+      }
+    });
+
+    return Object.entries(sourceMap)
+      .map(([name, data]) => {
+        // Build breakdown array from partners
+        const breakdown = Object.entries(data.partners)
+          .map(([partnerName, partnerData]) => ({
+            name: partnerName,
+            count: partnerData.count,
+            revenue: partnerData.revenue,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        return {
+          name: name || 'Unknown',
+          value: data.count,
+          revenue: data.revenue,
+          color: LEAD_SOURCE_COLORS[name] || '#6b7280',
+          breakdown: breakdown.length > 0 ? breakdown : undefined,
+        };
+      })
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
   }, [yearFilteredInvoices]);
 
   // Calendar events - combine invoice dates with Google Calendar events
@@ -1112,6 +1165,38 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Lead Sources Row */}
+        <div className="bg-white rounded-xl p-6 shadow-sm mb-6">
+          <h2 className="text-lg font-semibold text-slate-800 mb-4">📊 Lead Sources</h2>
+          {leadSourceData.length > 0 ? (
+            <div className="grid md:grid-cols-2 gap-6">
+              <LeadSourcePieChart data={leadSourceData} />
+              <div className="space-y-3">
+                <p className="text-sm text-slate-600 mb-4">Where your clients are coming from:</p>
+                {leadSourceData.map((source) => (
+                  <div key={source.name} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-slate-50">
+                    <div className="flex items-center gap-3">
+                      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: source.color }}></span>
+                      <span className="text-slate-700 font-medium">{source.name}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-800 font-medium">{source.value}</span>
+                      <span className="text-slate-400 ml-1">bookings</span>
+                      {source.revenue > 0 && (
+                        <span className="text-emerald-600 ml-2">• RM {source.revenue.toLocaleString()}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="h-48 flex items-center justify-center text-slate-400">
+              No lead source data for {selectedYear}. Add lead sources to your invoices to track them.
+            </div>
+          )}
         </div>
 
         {/* Calendar & Recent Activity Row */}

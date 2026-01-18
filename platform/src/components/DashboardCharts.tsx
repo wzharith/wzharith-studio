@@ -157,6 +157,93 @@ export function StatusPieChart({ data }: { data: StatusData[] }) {
   );
 }
 
+// Lead Source Pie Chart
+interface SubBreakdown {
+  name: string;
+  count: number;
+  revenue: number;
+}
+
+interface LeadSourceData {
+  name: string;
+  value: number;
+  revenue: number;
+  color: string;
+  breakdown?: SubBreakdown[];
+}
+
+const LEAD_SOURCE_COLORS: Record<string, string> = {
+  'Web': '#3b82f6',
+  'Instagram': '#ec4899',
+  'WhatsApp': '#22c55e',
+  'TikTok': '#000000',
+  'Referral': '#8b5cf6',
+  'Collaboration': '#f59e0b',
+  'Other': '#6b7280',
+  'Unknown': '#cbd5e1',
+  '': '#cbd5e1',
+};
+
+// Custom tooltip component for lead source with breakdown
+const LeadSourceTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: LeadSourceData }> }) => {
+  if (!active || !payload || !payload.length) return null;
+
+  const data = payload[0].payload;
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
+      <div className="font-semibold text-slate-800 mb-1">{data.name || 'Unknown'}</div>
+      <div className="text-slate-600">
+        {data.value} bookings • RM {data.revenue.toLocaleString()}
+      </div>
+      {data.breakdown && data.breakdown.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-slate-100">
+          {data.breakdown.map((sub, i) => (
+            <div key={i} className="flex justify-between text-xs text-slate-500 mt-0.5">
+              <span>└ {sub.name}</span>
+              <span>{sub.count} (RM {sub.revenue.toLocaleString()})</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export function LeadSourcePieChart({ data }: { data: LeadSourceData[] }) {
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={40}
+            outerRadius={70}
+            paddingAngle={3}
+            dataKey="value"
+            label={({ name, percent }) => name ? `${name} ${(percent * 100).toFixed(0)}%` : ''}
+            labelLine={false}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Pie>
+          <Legend
+            verticalAlign="bottom"
+            height={36}
+            formatter={(value) => <span className="text-slate-600 text-xs">{value}</span>}
+          />
+          <Tooltip content={<LeadSourceTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export { LEAD_SOURCE_COLORS };
+
 // Bookings Count Chart
 export function BookingsChart({ data }: { data: RevenueData[] }) {
   return (

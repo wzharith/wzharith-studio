@@ -11,6 +11,8 @@ if (typeof window !== 'undefined') {
   console.log('[GoogleSync] URL configured:', GOOGLE_SCRIPT_URL ? 'YES (' + GOOGLE_SCRIPT_URL.substring(0, 50) + '...)' : 'NO - secrets not set during build');
 }
 
+export type LeadSource = 'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | '';
+
 export interface StoredInvoice {
   id: string;
   invoiceNumber: string;
@@ -35,6 +37,8 @@ export interface StoredInvoice {
   linkedQuotationNumber?: string;
   convertedAt?: string;
   deletedAt?: string; // Soft delete timestamp
+  leadSource?: LeadSource;
+  collaborationPartner?: string;
 }
 
 export interface InvoiceItem {
@@ -284,6 +288,9 @@ export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invo
           linkedQuotationNumber: inv.linkedQuotationNumber ? String(inv.linkedQuotationNumber) : undefined,
           convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
           deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
+          // Lead source tracking
+          leadSource: (inv.leadSource ? String(inv.leadSource) : undefined) as LeadSource | undefined,
+          collaborationPartner: inv.collaborationPartner ? String(inv.collaborationPartner) : undefined,
         };
       });
 
@@ -591,6 +598,7 @@ export interface SiteConfigData {
     priceDisplay: string;
     description: string;
   }>;
+  collaborationPartners?: string[];
   transport_baseCharge?: number;
   transport_perKmRate?: number;
   transport_freeZone?: string;
