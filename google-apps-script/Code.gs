@@ -138,6 +138,9 @@ function doPost(e) {
       case 'saveBookingInquiry':
         result = saveBookingInquiry(data.inquiry);
         break;
+      case 'saveConfig':
+        result = saveConfig(data.data || data.config || {});
+        break;
       default:
         result = { error: 'Unknown action' };
     }

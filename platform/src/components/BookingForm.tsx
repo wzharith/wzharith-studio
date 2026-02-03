@@ -13,6 +13,7 @@ const TikTokIcon = ({ className }: { className?: string }) => (
 );
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 import AvailabilityCalendar from './AvailabilityCalendar';
+import { useCloudConfig } from '@/lib/cloud-config';
 import { saveBookingInquiry, isGoogleSyncEnabled } from '@/lib/google-sync';
 
 interface BookingFormData {
@@ -38,6 +39,9 @@ const getNextSaturday = (): string => {
 };
 
 export default function BookingForm() {
+  const { packages: cloudPackages, isLoading: packagesLoading } = useCloudConfig();
+  const packages = useMemo(() => cloudPackages.filter(pkg => !pkg.hidden), [cloudPackages]);
+
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const defaultDate = useMemo(() => getNextSaturday(), []);
@@ -88,7 +92,7 @@ export default function BookingForm() {
   };
 
   const onSubmit = async (data: BookingFormData) => {
-    const pkg = siteConfig.packages.find((p) => p.id === data.packageId);
+    const pkg = packages.find((p) => p.id === data.packageId);
     const eventDateToUse = data.eventDate || selectedDate;
     const formattedTime = formatTimeToAMPM();
     const formattedDate = formatDate(eventDateToUse);
@@ -365,10 +369,13 @@ ${data.message || 'None'}
                   </label>
                   <select
                     {...register('packageId')}
-                    className="w-full px-4 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    disabled={packagesLoading || packages.length === 0}
+                    className="w-full px-4 py-3 rounded-lg bg-midnight-800/50 border border-midnight-700 text-white focus:outline-none focus:border-gold-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    <option value="">Select a package</option>
-                    {siteConfig.packages.map((pkg) => (
+                    <option value="">
+                      {packagesLoading ? 'Loading...' : packages.length === 0 ? 'No packages available' : 'Select a package'}
+                    </option>
+                    {packages.map((pkg) => (
                       <option key={pkg.id} value={pkg.id}>
                         {pkg.name} - {pkg.priceDisplay}
                       </option>

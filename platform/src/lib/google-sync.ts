@@ -692,6 +692,8 @@ export interface SiteConfigData {
     popular?: boolean;
     songs?: string;
     duration?: string;
+    hidden?: boolean;
+    includedSegments?: Array<{ name: string; quantity: number }>;
   }>;
   addons?: Array<{
     id: string;
@@ -744,32 +746,132 @@ export const fetchConfig = async (): Promise<{ success: boolean; config: SiteCon
 };
 
 /**
- * Save configuration to Google Sheets
+ * Normalize config for comparison (sort object keys so equivalent configs stringify the same).
+ */
+function normalizedConfigString(c: SiteConfigData): string {
+  return JSON.stringify(sortObjectKeys(c));
+}
+function sortObjectKeys(obj: unknown): unknown {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+  const sorted: Record<string, unknown> = {};
+  for (const k of Object.keys(obj).sort()) {
+    sorted[k] = sortObjectKeys((obj as Record<string, unknown>)[k]);
+  }
+  return sorted;
+}
+
+/**
+ * Save a single config chunk to Google Sheets (backend merges by key).
+ * Large chunks are sent via our API proxy (POST) to avoid CORS and URL length limits.
+ * Small chunks use GET to the script URL directly.
+ */
+const saveConfigChunk = async (chunk: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
+  const payload = JSON.stringify({ action: 'saveConfig', data: chunk });
+  const usePost = payload.length > 1800; // POST for large chunks to avoid redirect URL limits
+
+  if (usePost) {
+    // Browser POST to Apps Script is blocked by CORS; proxy via our API (server-side POST has no CORS).
+    const proxyUrl = '/api/google-sync/save-config';
+    try {
+      const response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: chunk }),
+        redirect: 'follow',
+      });
+      if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
+      const result = await response.json();
+      return { success: result.success !== false, error: result.error };
+    } catch (postErr) {
+      console.warn('[Config] Proxy POST failed, trying GET for chunk:', postErr);
+    }
+  }
+
+  const params = new URLSearchParams({
+    action: 'saveConfig',
+    data: JSON.stringify(chunk),
+  });
+  const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
+    method: 'GET',
+    redirect: 'follow',
+  });
+  if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
+  const result = await response.json();
+  return { success: result.success !== false, error: result.error };
+};
+
+/**
+ * On reported failure, refetch config and compare to what we sent. If equal, treat as success.
+ */
+const verifyConfigSaved = async (config: SiteConfigData): Promise<boolean> => {
+  const fetched = await fetchConfig();
+  if (!fetched.success || !fetched.config) return false;
+  return normalizedConfigString(config) === normalizedConfigString(fetched.config);
+};
+
+/**
+ * Save configuration to Google Sheets.
+ * Splits into up to 3 GET requests (rest, packages, addons) to stay under URL length limits.
+ * On any chunk failure: retry that chunk once, then if still failing verify by refetch; if stored equals sent, return success.
  */
 export const saveConfigToGoogle = async (config: SiteConfigData): Promise<{ success: boolean; error?: string }> => {
   if (!isGoogleSyncEnabled()) {
     return { success: false, error: 'Google sync not configured' };
   }
 
+  const runWithRetry = async (chunk: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
+    const r = await saveConfigChunk(chunk);
+    if (r.success) return r;
+    const retry = await saveConfigChunk(chunk);
+    return retry;
+  };
+
   try {
-    const params = new URLSearchParams({
-      action: 'saveConfig',
-      data: JSON.stringify(config),
-    });
+    const { packages: configPackages, addons: configAddons, ...rest } = config;
 
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return { success: result.success, error: result.error };
+    const restChunk: Record<string, unknown> = { ...rest };
+    let r1 = await runWithRetry(restChunk);
+    if (!r1.success) {
+      console.error('[Config] Save error (rest):', r1.error);
+      if (await verifyConfigSaved(config)) {
+        console.log('[Config] Verify-after-save: stored config matches; treating as success');
+        return { success: true };
+      }
+      return { success: false, error: r1.error };
     }
 
-    return { success: false, error: 'Failed to save config' };
+    if (configPackages !== undefined) {
+      let r2 = await runWithRetry({ packages: configPackages });
+      if (!r2.success) {
+        console.error('[Config] Save error (packages):', r2.error);
+        if (await verifyConfigSaved(config)) {
+          console.log('[Config] Verify-after-save: stored config matches; treating as success');
+          return { success: true };
+        }
+        return { success: false, error: r2.error };
+      }
+    }
+
+    if (configAddons !== undefined) {
+      let r3 = await runWithRetry({ addons: configAddons });
+      if (!r3.success) {
+        console.error('[Config] Save error (addons):', r3.error);
+        if (await verifyConfigSaved(config)) {
+          console.log('[Config] Verify-after-save: stored config matches; treating as success');
+          return { success: true };
+        }
+        return { success: false, error: r3.error };
+      }
+    }
+
+    return { success: true };
   } catch (error) {
     console.error('[Config] Save error:', error);
+    if (await verifyConfigSaved(config)) {
+      console.log('[Config] Verify-after-save: stored config matches; treating as success');
+      return { success: true };
+    }
     return { success: false, error: String(error) };
   }
 };

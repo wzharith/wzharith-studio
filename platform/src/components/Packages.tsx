@@ -1,25 +1,31 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useMemo } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Check, Sparkles, Clock, Music, Loader2 } from 'lucide-react';
-import { siteConfig } from '@/config/site.config';
-import { useCloudConfig, isCloudConfigEnabled, getDefaultPackages, getDefaultAddons } from '@/lib/cloud-config';
+import { Check, Sparkles, Clock, Music, Loader2, Package } from 'lucide-react';
+import { useCloudConfig } from '@/lib/cloud-config';
 
 export default function Packages() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
 
-  // Feature flag: use cloud config or static file
-  const useCloud = isCloudConfigEnabled();
-  const { packages: cloudPackages, addons: cloudAddons, isLoading } = useCloudConfig();
+  const { packages: cloudPackages, addons: cloudAddons, isLoading, error } = useCloudConfig();
 
-  // Determine which data to use based on feature flag
-  const allPackages = useCloud ? cloudPackages : getDefaultPackages();
-  const addons = useCloud ? cloudAddons : getDefaultAddons();
+  // Filter out hidden packages for public display (backend-only, no hardcoded fallback)
+  const packages = useMemo(() => cloudPackages.filter(pkg => !pkg.hidden), [cloudPackages]);
+  const addons = cloudAddons;
 
-  // Filter out hidden packages for public display
-  const packages = allPackages.filter(pkg => !pkg.hidden);
+  // Dynamic grid columns: 1–4 based on package count so layout looks intentional (Tailwind-safe)
+  const gridCols = useMemo(() => {
+    const n = Math.min(Math.max(packages.length, 1), 4);
+    const lgMap: Record<number, string> = {
+      1: 'lg:grid-cols-1',
+      2: 'lg:grid-cols-2',
+      3: 'lg:grid-cols-3',
+      4: 'lg:grid-cols-4',
+    };
+    return `grid-cols-1 md:grid-cols-2 ${lgMap[n]}`;
+  }, [packages.length]);
 
   return (
     <section id="packages" className="py-24 px-6 relative" ref={ref}>
@@ -45,16 +51,33 @@ export default function Packages() {
           </p>
         </motion.div>
 
-        {/* Loading state (only shown when using cloud config) */}
-        {useCloud && isLoading && (
+        {/* Loading state */}
+        {isLoading && (
           <div className="flex items-center justify-center py-12 mb-16">
             <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
             <span className="ml-3 text-midnight-400">Loading packages...</span>
           </div>
         )}
 
+        {/* Error state (backend-only: no packages when fetch fails or cloud disabled) */}
+        {!isLoading && error && (
+          <div className="text-center py-12 mb-16 glass rounded-2xl px-6 max-w-xl mx-auto">
+            <Package className="w-12 h-12 text-midnight-500 mx-auto mb-3" />
+            <p className="font-sans text-midnight-400 text-sm">{error}</p>
+            <p className="font-sans text-midnight-500 text-xs mt-2">Configure backend in Admin or use Import from template.</p>
+          </div>
+        )}
+
+        {/* Empty state (no packages from backend) */}
+        {!isLoading && !error && packages.length === 0 && (
+          <div className="text-center py-12 mb-16 glass rounded-2xl px-6 max-w-xl mx-auto">
+            <Package className="w-12 h-12 text-midnight-500 mx-auto mb-3" />
+            <p className="font-sans text-midnight-400 text-sm">Packages will appear here once configured in Admin.</p>
+          </div>
+        )}
+
         {/* Packages Grid */}
-        <div className={`grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16 ${useCloud && isLoading ? 'hidden' : ''}`}>
+        <div className={`grid gap-6 mb-16 ${gridCols} ${isLoading ? 'hidden' : ''}`}>
           {packages.map((pkg, i) => (
             <motion.div
               key={pkg.id}
@@ -109,17 +132,31 @@ export default function Packages() {
               </div>
               )}
 
-              {/* Features */}
-              <ul className="space-y-3 mb-6">
-                {pkg.features.map((feature, j) => (
-                  <li key={j} className="flex items-start gap-2">
-                    <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
-                    <span className="font-sans text-sm text-midnight-300">
-                      {feature}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {/* What's included: segments (from backend) or features */}
+              {pkg.includedSegments?.length ? (
+                <ul className="space-y-3 mb-6">
+                  <span className="font-sans text-xs text-midnight-500 block mb-2">What&apos;s included</span>
+                  {pkg.includedSegments.map((seg, j) => (
+                    <li key={j} className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
+                      <span className="font-sans text-sm text-midnight-300">
+                        {seg.name}{seg.quantity !== 1 ? ` × ${seg.quantity}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <ul className="space-y-3 mb-6">
+                  {pkg.features.map((feature, j) => (
+                    <li key={j} className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
+                      <span className="font-sans text-sm text-midnight-300">
+                        {feature}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
               {/* CTA */}
               <a
@@ -137,7 +174,7 @@ export default function Packages() {
         </div>
 
         {/* Add-ons */}
-        {addons.length > 0 && !(useCloud && isLoading) && (
+        {addons.length > 0 && !isLoading && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={isInView ? { opacity: 1, y: 0 } : {}}

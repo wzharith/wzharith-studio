@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
 import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
@@ -16,6 +16,11 @@ import { clearConfigCache } from '@/lib/cloud-config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import { siteConfig } from '@/config/site.config';
 
+interface IncludedSegment {
+  name: string;
+  quantity: number;
+}
+
 interface PackageItem {
   id: string;
   name: string;
@@ -28,6 +33,7 @@ interface PackageItem {
   songs?: string;
   duration?: string;
   hidden?: boolean;
+  includedSegments?: IncludedSegment[];
 }
 
 interface AddonItem {
@@ -51,6 +57,8 @@ export default function AdminSettings() {
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const [lastSavedConfigState, setLastSavedConfigState] = useState<string>('');
+  const [justSaved, setJustSaved] = useState(false);
 
   // Active section
   const [activeSection, setActiveSection] = useState('business');
@@ -58,6 +66,7 @@ export default function AdminSettings() {
   // Packages state
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [addons, setAddons] = useState<AddonItem[]>([]);
+  const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
 
   // Collaboration partners state
   const [collaborationPartners, setCollaborationPartners] = useState<string[]>(['Baskara', 'Primadona', 'Skyeglass']);
@@ -107,6 +116,34 @@ export default function AdminSettings() {
     }
     setIsLoading(false);
   }, []);
+
+  // Stable snapshot of config for change detection (sort keys so comparison is consistent)
+  const sortObjectKeys = useCallback((obj: unknown): unknown => {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(obj).sort()) {
+      sorted[k] = sortObjectKeys((obj as Record<string, unknown>)[k]);
+    }
+    return sorted;
+  }, []);
+
+  const getFullConfig = useCallback((): SiteConfigData & { collaborationPartners?: string[] } => ({
+    ...config,
+    packages,
+    addons,
+    collaborationPartners,
+  }), [config, packages, addons, collaborationPartners]);
+
+  const currentConfigState = useMemo(
+    () => JSON.stringify(sortObjectKeys(getFullConfig())),
+    [getFullConfig, sortObjectKeys]
+  );
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (lastSavedConfigState === '') return true; // allow first save when no snapshot yet
+    return currentConfigState !== lastSavedConfigState;
+  }, [currentConfigState, lastSavedConfigState]);
 
   // Load config on auth
   useEffect(() => {
@@ -162,6 +199,8 @@ export default function AdminSettings() {
       popular: pkg.popular || false,
       songs: pkg.songs || '',
       duration: pkg.duration || '',
+      hidden: (pkg as { hidden?: boolean }).hidden || false,
+      includedSegments: [],
     }));
 
   const getDefaultAddons = (): AddonItem[] =>
@@ -176,74 +215,86 @@ export default function AdminSettings() {
   const loadConfig = async () => {
     setIsRefreshing(true);
 
-    // Initialize with defaults from site.config.ts
     const defaultConfig = getDefaultConfig();
     const defaultPackages = getDefaultPackages();
     const defaultAddons = getDefaultAddons();
 
     if (isGoogleSyncEnabled()) {
       const result = await fetchConfig();
-      const cloudIsEmpty = !result.success || Object.keys(result.config).length === 0;
+      const cloudIsEmpty = !result.success || Object.keys(result.config || {}).length === 0;
 
       if (cloudIsEmpty) {
-        // First use - push defaults to cloud automatically
-        console.log('[Admin] Cloud is empty, auto-pushing defaults...');
-        const fullDefaults = {
-          ...defaultConfig,
-          packages: defaultPackages,
-          addons: defaultAddons,
-        };
-
-        // Push to cloud in background
-        saveConfigToGoogle(fullDefaults).then(res => {
-          if (res.success) {
-            console.log('[Admin] Defaults synced to cloud successfully');
-          }
-        });
-
+        // Backend-only: cloud empty = show empty list (no pre-fill from siteConfig)
+        console.log('[Admin] Cloud is empty, showing empty packages/addons. Use Import from template to push defaults.');
         setConfig(defaultConfig);
-        setPackages(defaultPackages);
-        setAddons(defaultAddons);
+        setPackages([]);
+        setAddons([]);
+        const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: ['Baskara', 'Primadona', 'Skyeglass'] };
+        setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
       } else {
-        // Smart merge - only use cloud values that are non-empty
+        // Smart merge for business/config fields; packages/addons from backend only
         const mergedConfig: SiteConfigData = { ...defaultConfig };
-        Object.entries(result.config).forEach(([key, value]) => {
-          // Only override if value is not empty/null/undefined
+        Object.entries(result.config || {}).forEach(([key, value]) => {
           if (value !== undefined && value !== null && value !== '' && key !== 'packages' && key !== 'addons') {
             (mergedConfig as Record<string, unknown>)[key] = value;
           }
         });
         setConfig(mergedConfig);
 
-        // Use cloud packages/addons only if they have items, otherwise use defaults
-        const cloudPackages = result.config.packages;
-        const cloudAddons = result.config.addons;
+        const cloudPackages = result.config?.packages;
+        const cloudAddons = result.config?.addons;
 
-        setPackages(
-          Array.isArray(cloudPackages) && cloudPackages.length > 0
-            ? cloudPackages
-            : defaultPackages
-        );
-        setAddons(
-          Array.isArray(cloudAddons) && cloudAddons.length > 0
-            ? cloudAddons
-            : defaultAddons
-        );
+        setPackages(Array.isArray(cloudPackages) ? cloudPackages : []);
+        setAddons(Array.isArray(cloudAddons) ? cloudAddons : []);
 
-        // Load collaboration partners from config
-        const cloudPartners = result.config.collaborationPartners;
+        const cloudPartners = result.config?.collaborationPartners;
         if (Array.isArray(cloudPartners) && cloudPartners.length > 0) {
           setCollaborationPartners(cloudPartners);
         }
+        const fullConfig = {
+          ...mergedConfig,
+          packages: Array.isArray(cloudPackages) ? cloudPackages : [],
+          addons: Array.isArray(cloudAddons) ? cloudAddons : [],
+          collaborationPartners: Array.isArray(cloudPartners) && cloudPartners.length > 0 ? cloudPartners : ['Baskara', 'Primadona', 'Skyeglass'],
+        };
+        setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
       }
     } else {
-      // No Google sync - use defaults
+      // No Google sync: backend-only, show empty
       setConfig(defaultConfig);
-      setPackages(defaultPackages);
-      setAddons(defaultAddons);
+      setPackages([]);
+      setAddons([]);
+      const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: ['Baskara', 'Primadona', 'Skyeglass'] };
+      setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
     }
 
     setIsRefreshing(false);
+  };
+
+  // Import from template: push site.config packages/addons to backend once (for first-time setup)
+  const handleImportFromTemplate = async () => {
+    if (!isGoogleSyncEnabled()) {
+      setSaveMessage('Google sync not configured. Cannot import.');
+      setTimeout(() => setSaveMessage(''), 4000);
+      return;
+    }
+    const defaultConfig = getDefaultConfig();
+    const defaultPackages = getDefaultPackages();
+    const defaultAddons = getDefaultAddons();
+    const fullDefaults = {
+      ...defaultConfig,
+      packages: defaultPackages,
+      addons: defaultAddons,
+    };
+    const res = await saveConfigToGoogle(fullDefaults);
+    if (res.success) {
+      clearConfigCache();
+      await loadConfig();
+      setSaveMessage('Template imported. Packages and addons loaded from template.');
+    } else {
+      setSaveMessage('Import failed: ' + (res.error || 'Unknown error'));
+    }
+    setTimeout(() => setSaveMessage(''), 5000);
   };
 
   // Load config history
@@ -274,7 +325,6 @@ export default function AdminSettings() {
     setIsSaving(true);
     setSaveMessage('');
 
-    // Include packages, addons, and collaboration partners in config
     const fullConfig = {
       ...config,
       packages,
@@ -286,7 +336,9 @@ export default function AdminSettings() {
 
     if (result.success) {
       setSaveMessage('Settings saved successfully!');
-      // Clear cache so invoice/other pages get fresh data
+      setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 2000);
       clearConfigCache();
     } else {
       setSaveMessage('Error: ' + (result.error || 'Failed to save'));
@@ -315,10 +367,11 @@ export default function AdminSettings() {
       songs: '',
       duration: '1 hour',
       hidden: false,
+      includedSegments: [],
     }]);
   };
 
-  const updatePackage = (id: string, field: keyof PackageItem, value: string | number | boolean | string[]) => {
+  const updatePackage = (id: string, field: keyof PackageItem, value: string | number | boolean | string[] | IncludedSegment[]) => {
     setPackages(packages.map(pkg => {
       if (pkg.id !== id) return pkg;
 
@@ -333,8 +386,47 @@ export default function AdminSettings() {
     }));
   };
 
+  const addPackageSegment = (pkgId: string) => {
+    setPackages(packages.map(pkg => {
+      if (pkg.id !== pkgId) return pkg;
+      const segs = pkg.includedSegments ?? [];
+      return { ...pkg, includedSegments: [...segs, { name: '', quantity: 1 }] };
+    }));
+  };
+
+  const removePackageSegment = (pkgId: string, index: number) => {
+    setPackages(packages.map(pkg => {
+      if (pkg.id !== pkgId) return pkg;
+      const segs = (pkg.includedSegments ?? []).filter((_, i) => i !== index);
+      return { ...pkg, includedSegments: segs };
+    }));
+  };
+
+  const updatePackageSegment = (pkgId: string, index: number, field: 'name' | 'quantity', value: string | number) => {
+    setPackages(packages.map(pkg => {
+      if (pkg.id !== pkgId) return pkg;
+      const segs = [...(pkg.includedSegments ?? [])];
+      if (!segs[index]) return pkg;
+      segs[index] = { ...segs[index], [field]: field === 'quantity' ? Number(value) : value };
+      return { ...pkg, includedSegments: segs };
+    }));
+  };
+
+  const TIER_TEMPLATES: { label: string; segments: IncludedSegment[] }[] = [
+    { label: 'Entrance only', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }] },
+    { label: 'Entrance + Cake', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }] },
+    { label: 'Entrance + Cake + Meal', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }] },
+    { label: 'Entrance + Cake + Meal + Photo', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }, { name: 'Photography Session', quantity: 3 }] },
+    { label: 'Full (+ Moment of Blessing)', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Moment of Blessing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Photography Session', quantity: 3 }] },
+  ];
+
+  const applyTierTemplate = (pkgId: string, template: IncludedSegment[]) => {
+    setPackages(packages.map(pkg => pkg.id === pkgId ? { ...pkg, includedSegments: [...template] } : pkg));
+  };
+
   const removePackage = (id: string) => {
     setPackages(packages.filter(pkg => pkg.id !== id));
+    if (editingPackageId === id) setEditingPackageId(null);
   };
 
   // Addon management
@@ -496,11 +588,11 @@ export default function AdminSettings() {
             </button>
             <button
               onClick={handleSave}
-              disabled={isSaving || !isGoogleSyncEnabled()}
-              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-500 px-4 py-2 rounded-lg text-sm font-medium"
+              disabled={isSaving || !isGoogleSyncEnabled() || (!hasUnsavedChanges && !justSaved && lastSavedConfigState !== '')}
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-500 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-lg text-sm font-medium"
             >
               <Save className="w-4 h-4" />
-              {isSaving ? 'Saving...' : 'Save Changes'}
+              {isSaving ? 'Saving...' : justSaved ? 'Saved!' : 'Save Changes'}
             </button>
           </div>
         </div>
@@ -718,25 +810,41 @@ export default function AdminSettings() {
             {/* Packages Section */}
             {activeSection === 'packages' && (
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h2 className="text-lg font-semibold text-slate-800">Service Packages</h2>
-                  <button
-                    onClick={addPackage}
-                    className="flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-lg text-sm hover:bg-amber-600"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Package
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {isGoogleSyncEnabled() && (
+                      <button
+                        type="button"
+                        onClick={handleImportFromTemplate}
+                        className="flex items-center gap-2 bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm hover:bg-slate-300"
+                      >
+                        <FileText className="w-4 h-4" />
+                        Import from template
+                      </button>
+                    )}
+                    <button
+                      onClick={addPackage}
+                      className="flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-lg text-sm hover:bg-amber-600"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Package
+                    </button>
+                  </div>
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {packages.length === 0 ? (
-                    <p className="text-slate-500 text-center py-8">No packages yet. Click &quot;Add Package&quot; to create one.</p>
+                    <p className="text-slate-500 text-center py-8">No packages yet. Click &quot;Add Package&quot; to create one, or &quot;Import from template&quot; to load defaults from site config.</p>
                   ) : (
                     packages.map((pkg, index) => (
-                      <div key={pkg.id} className="border rounded-lg p-4 hover:border-amber-300 transition-colors">
-                        <div className="flex items-center justify-between mb-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-slate-500">Package {index + 1}</span>
+                      <div key={pkg.id} className="border rounded-lg overflow-hidden hover:border-amber-300 transition-colors">
+                        {/* Compact row: name, price, duration, songs, badges, Edit, Delete */}
+                        <div className="flex items-center justify-between gap-4 p-4 bg-white">
+                          <div className="flex-1 min-w-0 flex items-center gap-3 flex-wrap">
+                            <span className="font-medium text-slate-800">{pkg.name || 'Untitled'}</span>
+                            <span className="text-amber-600 font-semibold">RM {pkg.price}</span>
+                            {pkg.duration && <span className="text-slate-500 text-sm">{pkg.duration}</span>}
+                            {pkg.songs && <span className="text-slate-500 text-sm">{pkg.songs}</span>}
                             {pkg.popular && (
                               <span className="flex items-center gap-1 bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
                                 <Star className="w-3 h-3" /> Popular
@@ -748,112 +856,175 @@ export default function AdminSettings() {
                               </span>
                             )}
                           </div>
-                          <button
-                            onClick={() => removePackage(pkg.id)}
-                            className="text-red-400 hover:text-red-600"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="grid gap-3">
-                          {/* Row 1: Name */}
-                          <input
-                            type="text"
-                            value={pkg.name}
-                            onChange={(e) => updatePackage(pkg.id, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
-                            placeholder="Package Name (e.g., Full Package)"
-                          />
-
-                          {/* Row 2: Description */}
-                          <textarea
-                            value={pkg.description}
-                            onChange={(e) => updatePackage(pkg.id, 'description', e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 h-16"
-                            placeholder="Short description..."
-                          />
-
-                          {/* Row 3: Price, Duration, Songs */}
-                          <div className="grid grid-cols-3 gap-3">
-                            <div>
-                              <label className="block text-xs text-slate-500 mb-1">Price (RM)</label>
-                              <input
-                                type="number"
-                                value={pkg.price}
-                                onChange={(e) => updatePackage(pkg.id, 'price', Number(e.target.value))}
-                                className="w-full px-3 py-2 border rounded-lg"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs text-slate-500 mb-1">Duration</label>
-                              <input
-                                type="text"
-                                value={pkg.duration || ''}
-                                onChange={(e) => updatePackage(pkg.id, 'duration', e.target.value)}
-                                className="w-full px-3 py-2 border rounded-lg"
-                                placeholder="e.g., 1-1.5 hours"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs text-slate-500 mb-1">Songs</label>
-                              <input
-                                type="text"
-                                value={pkg.songs || ''}
-                                onChange={(e) => updatePackage(pkg.id, 'songs', e.target.value)}
-                                className="w-full px-3 py-2 border rounded-lg"
-                                placeholder="e.g., 5-6 songs"
-                              />
-                            </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPackageId(editingPackageId === pkg.id ? null : pkg.id)}
+                              className="flex items-center gap-1 px-2 py-1.5 text-slate-600 hover:bg-slate-100 rounded text-sm"
+                            >
+                              <Pencil className="w-4 h-4" />
+                              {editingPackageId === pkg.id ? 'Cancel' : 'Edit'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removePackage(pkg.id)}
+                              className="p-1.5 text-red-400 hover:bg-red-50 hover:text-red-600 rounded"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
-
-                          {/* Row 4: Price Note */}
-                          <div>
-                            <label className="block text-xs text-slate-500 mb-1">Price Note (optional)</label>
+                        </div>
+                        {/* Expandable detail form */}
+                        {editingPackageId === pkg.id && (
+                          <div className="border-t border-slate-200 bg-slate-50 p-4 grid gap-3">
                             <input
                               type="text"
-                              value={pkg.priceNote || ''}
-                              onChange={(e) => updatePackage(pkg.id, 'priceNote', e.target.value)}
-                              className="w-full px-3 py-2 border rounded-lg"
-                              placeholder="e.g., starting from"
+                              value={pkg.name}
+                              onChange={(e) => updatePackage(pkg.id, 'name', e.target.value)}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                              placeholder="Package Name (e.g., Full Package)"
                             />
-                          </div>
-
-                          {/* Row 5: Features */}
-                          <div>
-                            <label className="block text-xs text-slate-500 mb-1">Features (comma-separated)</label>
                             <textarea
-                              value={(pkg.features || []).join(', ')}
-                              onChange={(e) => updatePackage(pkg.id, 'features', e.target.value.split(',').map(f => f.trim()).filter(Boolean))}
-                              className="w-full px-3 py-2 border rounded-lg h-16"
-                              placeholder="e.g., Entrance performance, Cake cutting, Background music"
+                              value={pkg.description}
+                              onChange={(e) => updatePackage(pkg.id, 'description', e.target.value)}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 h-16"
+                              placeholder="Short description..."
                             />
-                          </div>
-
-                          {/* Row 6: Popular & Hidden Toggles */}
-                          <div className="flex flex-wrap gap-4">
-                            <label className="flex items-center gap-2 cursor-pointer">
+                            <div className="grid grid-cols-3 gap-3">
+                              <div>
+                                <label className="block text-xs text-slate-500 mb-1">Price (RM)</label>
+                                <input
+                                  type="number"
+                                  value={pkg.price}
+                                  onChange={(e) => updatePackage(pkg.id, 'price', Number(e.target.value))}
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-slate-500 mb-1">Duration</label>
+                                <input
+                                  type="text"
+                                  value={pkg.duration || ''}
+                                  onChange={(e) => updatePackage(pkg.id, 'duration', e.target.value)}
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                  placeholder="e.g., 1-1.5 hours"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-slate-500 mb-1">Songs</label>
+                                <input
+                                  type="text"
+                                  value={pkg.songs || ''}
+                                  onChange={(e) => updatePackage(pkg.id, 'songs', e.target.value)}
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                  placeholder="e.g., 5-6 songs"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Price Note (optional)</label>
                               <input
-                                type="checkbox"
-                                checked={pkg.popular || false}
-                                onChange={(e) => updatePackage(pkg.id, 'popular', e.target.checked)}
-                                className="w-4 h-4 text-amber-500 rounded focus:ring-amber-500"
+                                type="text"
+                                value={pkg.priceNote || ''}
+                                onChange={(e) => updatePackage(pkg.id, 'priceNote', e.target.value)}
+                                className="w-full px-3 py-2 border rounded-lg"
+                                placeholder="e.g., starting from"
                               />
-                              <span className="text-sm text-slate-600">Mark as Popular</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={pkg.hidden || false}
-                                onChange={(e) => updatePackage(pkg.id, 'hidden', e.target.checked)}
-                                className="w-4 h-4 text-slate-500 rounded focus:ring-slate-500"
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Features (one per line)</label>
+                              <textarea
+                                value={(pkg.features || []).join('\n')}
+                                onChange={(e) => updatePackage(pkg.id, 'features', e.target.value.split('\n').map(f => f.trim()).filter(Boolean))}
+                                className="w-full px-3 py-2 border rounded-lg h-24 font-mono text-sm"
+                                placeholder="One feature per line&#10;e.g. Entrance performance&#10;Cake cutting&#10;Background music"
                               />
-                              <span className="text-sm text-slate-600 flex items-center gap-1">
-                                <EyeOff className="w-3 h-3" />
-                                Hidden from website
-                              </span>
-                            </label>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-1">Included segments (for invoice &amp; package card)</label>
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                <select
+                                  className="px-2 py-1.5 border rounded text-sm text-slate-600"
+                                  onChange={(e) => {
+                                    const idx = e.target.selectedIndex;
+                                    if (idx > 0) applyTierTemplate(pkg.id, TIER_TEMPLATES[idx - 1].segments);
+                                    e.target.selectedIndex = 0;
+                                  }}
+                                >
+                                  <option value="">Use tier template...</option>
+                                  {TIER_TEMPLATES.map((t, i) => (
+                                    <option key={i} value={i}>{t.label}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => addPackageSegment(pkg.id)}
+                                  className="flex items-center gap-1 px-2 py-1.5 bg-slate-200 text-slate-700 rounded text-sm hover:bg-slate-300"
+                                >
+                                  <Plus className="w-3 h-3" /> Add segment
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {(pkg.includedSegments ?? []).map((seg, segIdx) => (
+                                  <div key={segIdx} className="flex items-center gap-2">
+                                    <input
+                                      type="text"
+                                      value={seg.name}
+                                      onChange={(e) => updatePackageSegment(pkg.id, segIdx, 'name', e.target.value)}
+                                      className="flex-1 px-2 py-1.5 border rounded text-sm"
+                                      placeholder="Segment name"
+                                    />
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      value={seg.quantity}
+                                      onChange={(e) => updatePackageSegment(pkg.id, segIdx, 'quantity', e.target.value)}
+                                      className="w-16 px-2 py-1.5 border rounded text-sm text-right"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => removePackageSegment(pkg.id, segIdx)}
+                                      className="p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-4">
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={pkg.popular || false}
+                                  onChange={(e) => updatePackage(pkg.id, 'popular', e.target.checked)}
+                                  className="w-4 h-4 text-amber-500 rounded focus:ring-amber-500"
+                                />
+                                <span className="text-sm text-slate-600">Mark as Popular</span>
+                              </label>
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={pkg.hidden || false}
+                                  onChange={(e) => updatePackage(pkg.id, 'hidden', e.target.checked)}
+                                  className="w-4 h-4 text-slate-500 rounded focus:ring-slate-500"
+                                />
+                                <span className="text-sm text-slate-600 flex items-center gap-1">
+                                  <EyeOff className="w-3 h-3" />
+                                  Hidden from website
+                                </span>
+                              </label>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setEditingPackageId(null)}
+                              className="w-full sm:w-auto px-4 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600"
+                            >
+                              Save
+                            </button>
                           </div>
-                        </div>
+                        )}
                       </div>
                     ))
                   )}

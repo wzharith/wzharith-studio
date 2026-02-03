@@ -28,6 +28,11 @@ export const isCloudConfigEnabled = (): boolean => {
   return process.env.NEXT_PUBLIC_USE_CLOUD_CONFIG === 'true';
 };
 
+export interface IncludedSegment {
+  name: string;
+  quantity: number;
+}
+
 export interface CloudPackage {
   id: string;
   name: string;
@@ -40,6 +45,7 @@ export interface CloudPackage {
   songs?: string;
   duration?: string;
   hidden?: boolean;
+  includedSegments?: IncludedSegment[];
 }
 
 export interface CloudAddon {
@@ -156,15 +162,15 @@ export const useCloudConfig = (): CloudConfigState => {
       const cached = getCachedConfig();
       if (cached) {
         console.log('[CloudConfig] Using cached config');
-        setPackages(cached.packages || getDefaultPackages());
-        setAddons(cached.addons || getDefaultAddons());
+        setPackages(Array.isArray(cached.packages) ? cached.packages : []);
+        setAddons(Array.isArray(cached.addons) ? cached.addons : []);
         setLastUpdated(new Date());
         setIsLoading(false);
         return;
       }
     }
 
-    // Fetch from cloud if enabled
+    // Fetch from cloud only; no hardcoded fallback
     if (isGoogleSyncEnabled()) {
       try {
         console.log('[CloudConfig] Fetching from cloud...');
@@ -174,12 +180,8 @@ export const useCloudConfig = (): CloudConfigState => {
           const cloudPackages = result.config.packages;
           const cloudAddons = result.config.addons;
 
-          const pkgs = Array.isArray(cloudPackages) && cloudPackages.length > 0
-            ? cloudPackages
-            : getDefaultPackages();
-          const adds = Array.isArray(cloudAddons) && cloudAddons.length > 0
-            ? cloudAddons
-            : getDefaultAddons();
+          const pkgs = Array.isArray(cloudPackages) ? cloudPackages : [];
+          const adds = Array.isArray(cloudAddons) ? cloudAddons : [];
 
           setPackages(pkgs);
           setAddons(adds);
@@ -194,23 +196,24 @@ export const useCloudConfig = (): CloudConfigState => {
           setLastUpdated(new Date());
           console.log('[CloudConfig] Loaded from cloud:', { packages: pkgs.length, addons: adds.length });
         } else {
-          // Cloud failed, use defaults
-          console.log('[CloudConfig] Cloud fetch failed, using defaults');
-          setPackages(getDefaultPackages());
-          setAddons(getDefaultAddons());
-          setError('Could not load from cloud, using defaults');
+          // Cloud failed or empty: no fallback to hardcoded
+          console.log('[CloudConfig] Cloud fetch failed or empty, using empty config');
+          setPackages([]);
+          setAddons([]);
+          setError(result.error || 'Could not load from cloud. Configure backend or use Import from template in Admin.');
         }
       } catch (err) {
         console.error('[CloudConfig] Error:', err);
-        setPackages(getDefaultPackages());
-        setAddons(getDefaultAddons());
+        setPackages([]);
+        setAddons([]);
         setError('Failed to fetch config');
       }
     } else {
-      // Google sync not enabled, use defaults
-      console.log('[CloudConfig] Google sync not enabled, using defaults');
-      setPackages(getDefaultPackages());
-      setAddons(getDefaultAddons());
+      // Google sync not enabled: backend-only, so show empty
+      console.log('[CloudConfig] Google sync not enabled, packages/addons from backend only');
+      setPackages([]);
+      setAddons([]);
+      setError('Cloud config disabled. Set NEXT_PUBLIC_USE_CLOUD_CONFIG and NEXT_PUBLIC_GOOGLE_SCRIPT_URL to load packages.');
     }
 
     setIsLoading(false);

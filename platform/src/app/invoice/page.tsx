@@ -1088,11 +1088,19 @@ function InvoiceGeneratorContent() {
     }
   };
 
-  // Package presets (from cloud config, falls back to site.config.ts)
+  // Format included segments for invoice details (one line per segment: "Name × Qty")
+  const formatPackageDetails = (pkg: { description: string; includedSegments?: Array<{ name: string; quantity: number }> }) => {
+    if (pkg.includedSegments?.length) {
+      return pkg.includedSegments.map(s => `${s.name} × ${s.quantity}`).join('\n');
+    }
+    return pkg.description;
+  };
+
+  // Package presets (from cloud config only)
   const packagePresets = cloudPackages.map(pkg => ({
     name: pkg.name,
     price: pkg.price,
-    details: pkg.description,
+    details: formatPackageDetails(pkg),
     setDeposit: true,
   }));
 
@@ -2275,7 +2283,9 @@ function InvoiceGeneratorContent() {
                           </div>
                           <div className="hidden print:block">
                             <div className="font-medium text-slate-800 text-sm">{item.description}</div>
-                            {item.details && <div className="text-xs text-slate-500 mt-0.5">{item.details}</div>}
+                            {item.details && (
+                              <div className="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{item.details}</div>
+                            )}
                           </div>
                         </td>
                         <td className="py-4 px-2 text-center align-middle" style={{ width: '10%' }}>
