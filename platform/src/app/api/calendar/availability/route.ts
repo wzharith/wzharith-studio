@@ -3,6 +3,7 @@ import {
   getAvailability,
   isCalendarConfigured,
   isCalendarNotFoundOrInaccessible,
+  getCalendarErrorStatus,
 } from '@/lib/google-calendar';
 
 export const runtime = 'nodejs';
@@ -41,6 +42,23 @@ export async function GET(request: NextRequest) {
         hint:
           'Google Calendar returned 404. Share the bookings calendar with your service account, or fix GOOGLE_CALENDAR_ID.',
       });
+    }
+    const status = getCalendarErrorStatus(err);
+    if (status === 401 || status === 403) {
+      // Most common on Vercel: env var formatting or calendar sharing permissions.
+      console.warn('[/api/calendar/availability] Calendar auth/permission error', { status });
+      return NextResponse.json(
+        {
+          success: true,
+          month,
+          year,
+          bookedDates: [],
+          calendarUnreachable: true,
+          hint:
+            'Google Calendar returned 401/403. Check GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY formatting (paste with \\n) and ensure the calendar is shared with the service account email (Make changes to events).',
+        },
+        { status: 200 }
+      );
     }
     console.error('[/api/calendar/availability]', err);
     return NextResponse.json(

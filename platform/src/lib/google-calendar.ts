@@ -13,8 +13,17 @@ function readPrivateKey(): string {
     process.env.GOOGLE_PRIVATE_KEY ||
     '';
   if (!raw) return '';
-  // Vercel often stores newlines as literal "\n" in env values.
-  return raw.replace(/\\n/g, '\n');
+  // Vercel env UI often stores newlines as literal "\n".
+  // Also tolerate users pasting the value wrapped in quotes.
+  let key = raw.trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  key = key.replace(/\\n/g, '\n');
+  return key;
 }
 
 export function isCalendarConfigured(): boolean {
@@ -69,6 +78,12 @@ export function isCalendarNotFoundOrInaccessible(err: unknown): boolean {
     e.status === 404 ||
     e.response?.status === 404
   );
+}
+
+export function getCalendarErrorStatus(err: unknown): number | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const e = err as { code?: number; response?: { status?: number }; status?: number };
+  return e.response?.status ?? e.status ?? (typeof e.code === 'number' ? e.code : null);
 }
 
 function isPerformanceEvent(title: string | null | undefined): boolean {
