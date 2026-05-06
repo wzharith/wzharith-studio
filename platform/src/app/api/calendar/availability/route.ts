@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAvailability, isCalendarConfigured } from '@/lib/google-calendar';
+import {
+  getAvailability,
+  isCalendarConfigured,
+  isCalendarNotFoundOrInaccessible,
+} from '@/lib/google-calendar';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +28,20 @@ export async function GET(request: NextRequest) {
     const data = await getAvailability(month, year);
     return NextResponse.json({ success: true, ...data });
   } catch (err) {
+    if (isCalendarNotFoundOrInaccessible(err)) {
+      console.warn(
+        '[/api/calendar/availability] Calendar not found or not shared — set GOOGLE_CALENDAR_ID to the ID under Settings → Integrate calendar, and share that calendar with GOOGLE_SERVICE_ACCOUNT_EMAIL (Make changes to events).'
+      );
+      return NextResponse.json({
+        success: true,
+        month,
+        year,
+        bookedDates: [],
+        calendarUnreachable: true,
+        hint:
+          'Google Calendar returned 404. Share the bookings calendar with your service account, or fix GOOGLE_CALENDAR_ID.',
+      });
+    }
     console.error('[/api/calendar/availability]', err);
     return NextResponse.json(
       { success: false, month, year, bookedDates: [], error: err instanceof Error ? err.message : String(err) },

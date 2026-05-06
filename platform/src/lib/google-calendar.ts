@@ -47,9 +47,28 @@ export function getCalendarClient(): calendar_v3.Calendar {
 }
 
 function getCalendarId(): string {
-  const id = process.env.GOOGLE_CALENDAR_ID;
+  let id = process.env.GOOGLE_CALENDAR_ID;
   if (!id) throw new Error('GOOGLE_CALENDAR_ID is not set');
+  id = id.trim();
+  if (
+    (id.startsWith('"') && id.endsWith('"')) ||
+    (id.startsWith("'") && id.endsWith("'"))
+  ) {
+    id = id.slice(1, -1).trim();
+  }
+  if (!id) throw new Error('GOOGLE_CALENDAR_ID is empty');
   return id;
+}
+
+/** True when Calendar API returned 404 (wrong ID or calendar not shared with service account). */
+export function isCalendarNotFoundOrInaccessible(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: number; response?: { status?: number }; status?: number };
+  return (
+    e.code === 404 ||
+    e.status === 404 ||
+    e.response?.status === 404
+  );
 }
 
 function isPerformanceEvent(title: string | null | undefined): boolean {
