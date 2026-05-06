@@ -1,5 +1,6 @@
 import './globals.css'
 import { siteMetadata } from '@/config/metadata.config'
+import { Analytics } from '@vercel/analytics/next'
 
 export const metadata = siteMetadata;
 
@@ -16,6 +17,7 @@ export default function RootLayout({
       <body className="font-sans antialiased">
         <div className="noise-overlay" />
         {children}
+        <Analytics />
       </body>
     </html>
   )
