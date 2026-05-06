@@ -58,6 +58,11 @@ export const invoices = pgTable(
 
     linkedQuotationNumber: text('linked_quotation_number').default('').notNull(),
     convertedAt: text('converted_at').default('').notNull(),
+    notes: text('notes').default('').notNull(),
+    songSelections: jsonb('song_selections')
+      .$type<Array<{ songId: string; title?: string; artist?: string }>>()
+      .default([])
+      .notNull(),
 
     createdAt: timestamp('created_at', { withTimezone: true })
       .default(sql`now()`)
@@ -78,6 +83,36 @@ export const invoices = pgTable(
 
 export type Invoice = typeof invoices.$inferSelect;
 export type NewInvoice = typeof invoices.$inferInsert;
+
+/** Repertoire songs — powers public catalog and invoice song picks */
+export const songs = pgTable(
+  'songs',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    artist: text('artist').notNull(),
+    category: text('category').notNull(),
+    language: text('language').notNull(),
+    popularity: integer('popularity').default(3).notNull(),
+    mood: jsonb('mood').$type<string[]>().default([]).notNull(),
+    recommendedFor: jsonb('recommended_for').$type<string[]>().default([]).notNull(),
+    sortOrder: integer('sort_order').default(0).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .default(sql`now()`)
+      .notNull(),
+  },
+  (t) => ({
+    categoryIdx: index('songs_category_idx').on(t.category),
+    activeIdx: index('songs_active_idx').on(t.isActive),
+  })
+);
+
+export type SongRow = typeof songs.$inferSelect;
+export type NewSongRow = typeof songs.$inferInsert;
 
 export const configKv = pgTable('config_kv', {
   key: text('key').primaryKey(),

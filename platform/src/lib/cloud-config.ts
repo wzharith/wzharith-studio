@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchConfig, type SiteConfigData, type SiteConfigFeatures } from './google-sync';
+import { fetchConfig, type SiteConfigData, type SiteConfigFeatures } from './studio-api';
 import { siteConfig } from '@/config/site.config';
 
 /** Resolved feature flags for the main site (with defaults) */
@@ -146,7 +146,7 @@ export const getDefaultAddons = (): CloudAddon[] =>
   }));
 
 /**
- * Hook to fetch packages and addons from Google Sheets with caching
+ * Hook to fetch packages and addons from Neon (`/api/config`) with caching
  *
  * Usage:
  * const { packages, addons, isLoading, error, refresh } = useCloudConfig();

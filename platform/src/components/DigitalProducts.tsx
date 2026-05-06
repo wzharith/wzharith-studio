@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Music, FileMusic, Headphones, BookOpen, Download, ArrowRight, CheckCircle, Phone } from 'lucide-react';
-import { saveNotificationSubscriber, isGoogleSyncEnabled } from '@/lib/google-sync';
+import { saveNotificationSubscriber, isStudioApiAvailable } from '@/lib/studio-api';
 
 const products = [
   {
@@ -54,7 +54,7 @@ export default function DigitalProducts({ showNotifyBlock = true }: DigitalProdu
 
     setIsSubmitting(true);
     try {
-      if (isGoogleSyncEnabled()) {
+      if (isStudioApiAvailable()) {
         await saveNotificationSubscriber(phone.trim());
       }
       setIsSubmitted(true);

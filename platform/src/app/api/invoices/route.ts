@@ -3,6 +3,7 @@ import { desc, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { invoices } from '@/db/schema';
 import { invoiceToRow, rowToInvoice } from '@/db/invoice-mapper';
+import { dedupeInvoicesByInvoiceNumber } from '@/lib/invoice-dedupe';
 import { requireAuthRoute } from '@/lib/server-auth';
 
 export const runtime = 'nodejs';
@@ -14,9 +15,10 @@ export async function GET() {
 
   try {
     const rows = await db.select().from(invoices).orderBy(desc(invoices.createdAt));
+    const mapped = rows.map(rowToInvoice);
     return NextResponse.json({
       success: true,
-      invoices: rows.map(rowToInvoice),
+      invoices: dedupeInvoicesByInvoiceNumber(mapped),
     });
   } catch (err) {
     console.error('[/api/invoices GET]', err);
@@ -91,6 +93,8 @@ export async function POST(request: NextRequest) {
             linkedQuotationNumber: row.linkedQuotationNumber,
             convertedAt: row.convertedAt,
             deletedAt: row.deletedAt,
+            notes: row.notes,
+            songSelections: row.songSelections,
             updatedAt: sql`now()`,
           },
         });

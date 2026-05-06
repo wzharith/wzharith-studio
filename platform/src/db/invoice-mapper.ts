@@ -1,7 +1,8 @@
 import type { Invoice, NewInvoice } from './schema';
+import { normalizeInvoiceNumber } from '@/lib/invoice-dedupe';
 
 /**
- * Camel-case shape returned to the frontend (matches StoredInvoice in @/lib/google-sync).
+ * Camel-case shape returned to the frontend (matches StoredInvoice in @/lib/studio-api).
  * Empty strings are preserved (the UI tolerates them); the optional fields are returned
  * as `undefined` only for `linkedQuotationNumber`/`convertedAt`/`deletedAt` to keep the
  * frontend's existing handling consistent.
@@ -43,6 +44,8 @@ export interface InvoiceDTO {
   linkedQuotationNumber?: string;
   linkedQuotation?: string;
   convertedAt?: string;
+  notes?: string;
+  songSelections?: Array<{ songId: string; title?: string; artist?: string }>;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -53,7 +56,7 @@ export function rowToInvoice(row: Invoice): InvoiceDTO {
   const dtype = row.discountType === 'percent' ? 'percent' : 'amount';
   return {
     id: row.id,
-    invoiceNumber: row.invoiceNumber,
+    invoiceNumber: normalizeInvoiceNumber(row.invoiceNumber),
     documentType: dt,
     status: row.status,
     clientName: row.clientName,
@@ -85,9 +88,17 @@ export function rowToInvoice(row: Invoice): InvoiceDTO {
     receiptSentDate: row.receiptSentDate || undefined,
     eventCompletedDate: row.eventCompletedDate || undefined,
     feedbackStatus: row.feedbackStatus || undefined,
-    linkedQuotationNumber: row.linkedQuotationNumber || undefined,
-    linkedQuotation: row.linkedQuotationNumber || undefined,
+    linkedQuotationNumber: row.linkedQuotationNumber
+      ? normalizeInvoiceNumber(row.linkedQuotationNumber)
+      : undefined,
+    linkedQuotation: row.linkedQuotationNumber
+      ? normalizeInvoiceNumber(row.linkedQuotationNumber)
+      : undefined,
     convertedAt: row.convertedAt || undefined,
+    notes: row.notes || undefined,
+    songSelections: Array.isArray(row.songSelections)
+      ? (row.songSelections as InvoiceDTO['songSelections'])
+      : [],
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
     deletedAt: row.deletedAt
@@ -134,6 +145,8 @@ interface IncomingInvoice {
   convertedAt?: string;
   createdAt?: string;
   deletedAt?: string | null;
+  notes?: string;
+  songSelections?: Array<{ songId: string; title?: string; artist?: string }>;
 }
 
 const num = (v: number | string | undefined, def = 0): number => {
@@ -156,8 +169,9 @@ const bool = (v: unknown): boolean => {
 export function invoiceToRow(input: IncomingInvoice): NewInvoice {
   const dt = input.documentType === 'invoice' ? 'invoice' : 'quotation';
   const dtype = input.discountType === 'percent' ? 'percent' : 'amount';
+  const quoLink = str(input.linkedQuotationNumber);
   return {
-    invoiceNumber: input.invoiceNumber,
+    invoiceNumber: normalizeInvoiceNumber(str(input.invoiceNumber)),
     documentType: dt,
     status: str(input.status, 'quotation_draft'),
     clientName: str(input.clientName),
@@ -188,8 +202,10 @@ export function invoiceToRow(input: IncomingInvoice): NewInvoice {
     receiptSentDate: str(input.receiptSentDate),
     eventCompletedDate: str(input.eventCompletedDate),
     feedbackStatus: str(input.feedbackStatus, 'pending'),
-    linkedQuotationNumber: str(input.linkedQuotationNumber),
+    linkedQuotationNumber: quoLink ? normalizeInvoiceNumber(quoLink) : '',
     convertedAt: str(input.convertedAt),
     deletedAt: input.deletedAt ? new Date(input.deletedAt) : null,
+    notes: str(input.notes),
+    songSelections: Array.isArray(input.songSelections) ? input.songSelections : [],
   };
 }

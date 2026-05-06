@@ -1,16 +1,59 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Search, Filter, Star, Music } from 'lucide-react';
-import { songs, categories } from '@/data/songs';
+import { songs as fallbackSongs, categories } from '@/data/songs';
+
+type CatalogSong = {
+  id: string;
+  title: string;
+  artist: string;
+  category: string;
+  language: string;
+  popularity: number;
+  mood: string[];
+  recommended_for: string[];
+};
 
 export default function SongCatalog() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeLanguage, setActiveLanguage] = useState<string | null>(null);
+  const [catalogSongs, setCatalogSongs] = useState<CatalogSong[] | null>(null);
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/songs', { cache: 'no-store' });
+        const data = (await res.json()) as { success?: boolean; songs?: CatalogSong[] };
+        if (!cancelled && data.success && Array.isArray(data.songs) && data.songs.length > 0) {
+          setCatalogSongs(data.songs);
+        } else if (!cancelled) {
+          setCatalogSongs(null);
+        }
+      } catch {
+        if (!cancelled) setCatalogSongs(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const songs = catalogSongs ?? fallbackSongs.map((s) => ({
+    id: s.id,
+    title: s.title,
+    artist: s.artist,
+    category: s.category,
+    language: s.language,
+    popularity: s.popularity,
+    mood: s.mood,
+    recommended_for: s.recommended_for,
+  }));
 
   const filteredSongs = songs.filter((song) => {
     const matchesSearch =
@@ -22,6 +65,8 @@ export default function SongCatalog() {
       !activeLanguage || song.language === activeLanguage;
     return matchesSearch && matchesCategory && matchesLanguage;
   });
+
+  const countLabel = catalogSongs ? `${catalogSongs.length}+` : '46+';
 
   return (
     <section id="songs" className="py-24 px-6" ref={ref}>
@@ -39,7 +84,7 @@ export default function SongCatalog() {
             Song <span className="gold-text">Catalog</span>
           </h2>
           <p className="font-body text-lg text-midnight-300 max-w-2xl mx-auto">
-            Browse through my collection of 46+ songs carefully curated for weddings
+            Browse through my collection of {countLabel} songs carefully curated for weddings
             and special events. From romantic English ballads to beloved Malay classics.
           </p>
         </motion.div>
@@ -127,9 +172,9 @@ export default function SongCatalog() {
                       {song.category.replace('-', ' ')}
                     </span>
                     <div className="flex items-center gap-0.5">
-                      {Array.from({ length: song.popularity }).map((_, i) => (
+                      {Array.from({ length: song.popularity }).map((_, si) => (
                         <Star
-                          key={i}
+                          key={si}
                           className="w-3 h-3 text-gold-400 fill-gold-400"
                         />
                       ))}

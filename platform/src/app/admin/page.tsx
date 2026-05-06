@@ -4,15 +4,15 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp, Pencil, Layout, Copy } from 'lucide-react';
 import Link from 'next/link';
 import {
-  isGoogleSyncEnabled,
+  isStudioApiAvailable,
   fetchConfig,
-  saveConfigToGoogle,
+  saveConfig,
   archiveConfig,
   fetchConfigHistory,
   type SiteConfigData,
   type SiteConfigFeatures,
   type ConfigHistoryEntry,
-} from '@/lib/google-sync';
+} from '@/lib/studio-api';
 import { clearConfigCache } from '@/lib/cloud-config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import { siteConfig } from '@/config/site.config';
@@ -276,7 +276,7 @@ export default function AdminSettings() {
     const defaultPackages = getDefaultPackages();
     const defaultAddons = getDefaultAddons();
 
-    if (isGoogleSyncEnabled()) {
+    if (isStudioApiAvailable()) {
       const result = await fetchConfig();
       const cloudIsEmpty = !result.success || Object.keys(result.config || {}).length === 0;
 
@@ -344,7 +344,7 @@ export default function AdminSettings() {
 
   // Import from template: push site.config packages/addons to backend once (for first-time setup)
   const handleImportFromTemplate = async () => {
-    if (!isGoogleSyncEnabled()) {
+    if (!isStudioApiAvailable()) {
       setSaveMessage('Google sync not configured. Cannot import.');
       setTimeout(() => setSaveMessage(''), 4000);
       return;
@@ -357,7 +357,7 @@ export default function AdminSettings() {
       packages: defaultPackages,
       addons: defaultAddons,
     };
-    const res = await saveConfigToGoogle(fullDefaults);
+    const res = await saveConfig(fullDefaults);
     if (res.success) {
       clearConfigCache();
       await loadConfig();
@@ -370,7 +370,7 @@ export default function AdminSettings() {
 
   // Load config history
   const loadConfigHistory = async () => {
-    if (isGoogleSyncEnabled()) {
+    if (isStudioApiAvailable()) {
       const result = await fetchConfigHistory();
       if (result.success) {
         setConfigHistory(result.history);
@@ -404,7 +404,7 @@ export default function AdminSettings() {
       collaborationPartners,
     };
 
-    const result = await saveConfigToGoogle(fullConfig);
+    const result = await saveConfig(fullConfig);
 
     if (result.success) {
       setSaveMessage('Settings saved successfully!');
@@ -425,12 +425,12 @@ export default function AdminSettings() {
   };
 
   const handleSaveRest = async () => {
-    if (!isGoogleSyncEnabled()) return;
+    if (!isStudioApiAvailable()) return;
     setIsSaving(true);
     setSectionSaveType('rest');
     setSaveMessage('');
     const restChunk = getRestChunk() as SiteConfigData;
-    const result = await saveConfigToGoogle(restChunk);
+    const result = await saveConfig(restChunk);
     if (result.success) {
       setSaveMessage('Settings saved!');
       setLastSavedRestState(JSON.stringify(sortObjectKeys(restChunk)));
@@ -444,11 +444,11 @@ export default function AdminSettings() {
   };
 
   const handleSavePackages = async () => {
-    if (!isGoogleSyncEnabled()) return;
+    if (!isStudioApiAvailable()) return;
     setIsSaving(true);
     setSectionSaveType('packages');
     setSaveMessage('');
-    const result = await saveConfigToGoogle({ packages });
+    const result = await saveConfig({ packages });
     if (result.success) {
       setSaveMessage('Packages saved!');
       setLastSavedPackagesState(JSON.stringify(sortObjectKeys(packages)));
@@ -462,11 +462,11 @@ export default function AdminSettings() {
   };
 
   const handleSaveAddons = async () => {
-    if (!isGoogleSyncEnabled()) return;
+    if (!isStudioApiAvailable()) return;
     setIsSaving(true);
     setSectionSaveType('addons');
     setSaveMessage('');
-    const result = await saveConfigToGoogle({ addons });
+    const result = await saveConfig({ addons });
     if (result.success) {
       setSaveMessage('Add-ons saved!');
       setLastSavedAddonsState(JSON.stringify(sortObjectKeys(addons)));
@@ -719,7 +719,7 @@ export default function AdminSettings() {
             </nav>
           </div>
           <div className="flex items-center gap-3">
-            {!isGoogleSyncEnabled() && (
+            {!isStudioApiAvailable() && (
               <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded">
                 Google Sync Not Configured
               </span>
@@ -734,7 +734,7 @@ export default function AdminSettings() {
             </button>
             <button
               onClick={handleSave}
-              disabled={isSaving || !isGoogleSyncEnabled() || (!hasUnsavedChanges && !justSaved && lastSavedConfigState !== '')}
+              disabled={isSaving || !isStudioApiAvailable() || (!hasUnsavedChanges && !justSaved && lastSavedConfigState !== '')}
               className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-500 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-lg text-sm font-medium"
             >
               <Save className="w-4 h-4" />
@@ -823,7 +823,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -875,7 +875,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -937,7 +937,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -989,7 +989,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -1011,7 +1011,7 @@ export default function AdminSettings() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <h2 className="text-lg font-semibold text-slate-800">Service Packages</h2>
                   <div className="flex items-center gap-2">
-                    {isGoogleSyncEnabled() && (
+                    {isStudioApiAvailable() && (
                       <>
                         <button
                           type="button"
@@ -1269,7 +1269,7 @@ export default function AdminSettings() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <h2 className="text-lg font-semibold text-slate-800">Add-on Services</h2>
                   <div className="flex items-center gap-2">
-                    {isGoogleSyncEnabled() && (
+                    {isStudioApiAvailable() && (
                       <button
                         type="button"
                         onClick={handleSaveAddons}
@@ -1405,7 +1405,7 @@ export default function AdminSettings() {
                     ))
                   )}
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -1458,7 +1458,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -1518,7 +1518,7 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -1569,7 +1569,7 @@ export default function AdminSettings() {
                     </div>
                   ))}
                 </div>
-                {isGoogleSyncEnabled() && (
+                {isStudioApiAvailable() && (
                   <div className="pt-2">
                     <button
                       type="button"
@@ -1618,7 +1618,7 @@ export default function AdminSettings() {
                     </div>
                     <button
                       onClick={handleArchive}
-                      disabled={isArchiving || !isGoogleSyncEnabled()}
+                      disabled={isArchiving || !isStudioApiAvailable()}
                       className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
                     >
                       <Archive className="w-4 h-4" />

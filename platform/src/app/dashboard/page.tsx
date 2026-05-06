@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ArrowLeft,
   RefreshCw,
@@ -29,19 +29,24 @@ import {
   ExternalLink,
   AlertTriangle,
   Zap,
+  Terminal,
+  Play,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  isGoogleSyncEnabled,
-  fetchInvoicesFromCloud,
+  isStudioApiAvailable,
+  fetchInvoices,
   getAvailability,
   type StoredInvoice,
   type CalendarEventInfo,
   getCalendarEvents,
-} from '@/lib/google-sync';
+} from '@/lib/studio-api';
+import { READ_ONLY_API_ENDPOINTS, type ReadOnlyApiEndpoint } from '@/lib/read-only-api-catalog';
+import { dedupeInvoicesByInvoiceNumber } from '@/lib/invoice-dedupe';
 import { RevenueChart, StatusPieChart, PackagePieChart, ConversionFunnelChart, LeadSourcePieChart, LEAD_SOURCE_COLORS } from '@/components/DashboardCharts';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
+import { siteConfig } from '@/config/site.config';
 
 export default function Dashboard() {
   // Authentication
@@ -56,6 +61,24 @@ export default function Dashboard() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [calendarBookedDates, setCalendarBookedDates] = useState<string[]>([]);
   const [calendarEvents, setCalendarEventsData] = useState<CalendarEventInfo[]>([]);
+
+  type SongLibraryRow = {
+    id: string;
+    title: string;
+    artist: string;
+    category: string;
+    language: string;
+    popularity: number;
+    mood: string[];
+    recommended_for: string[];
+  };
+  const [songs, setSongs] = useState<SongLibraryRow[]>([]);
+  const [songsLoading, setSongsLoading] = useState(false);
+
+  type ProbeResult = { status: number; ms: number; bodyPreview: string; error?: string };
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  const [probingId, setProbingId] = useState<string | null>(null);
+  const [probeInvoiceNumber, setProbeInvoiceNumber] = useState('');
 
   // Calendar state
   const [calendarDate, setCalendarDate] = useState(new Date());
@@ -127,23 +150,36 @@ export default function Dashboard() {
 
   const loadData = async () => {
     setIsRefreshing(true);
+    setSongsLoading(true);
 
     // Load from localStorage first
     const stored = localStorage.getItem('studio_invoices');
-    const localInvoices: StoredInvoice[] = stored ? JSON.parse(stored) : [];
+    const localInvoices = dedupeInvoicesByInvoiceNumber(
+      (stored ? JSON.parse(stored) : []) as StoredInvoice[]
+    );
     setInvoices(localInvoices);
 
-    // Try to fetch from cloud
-    if (isGoogleSyncEnabled()) {
+    const songsPromise = fetch('/api/songs', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data: { success?: boolean; songs?: SongLibraryRow[] }) => {
+        if (data?.success && Array.isArray(data.songs)) {
+          setSongs(data.songs);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setSongsLoading(false));
+
+    // Try to fetch from API (Neon via Next routes)
+    if (isStudioApiAvailable()) {
       // Fetch invoices, calendar availability, and calendar events in parallel
       const [invoicesResult, availabilityResult, eventsResult] = await Promise.all([
-        fetchInvoicesFromCloud(),
+        fetchInvoices(),
         getAvailability(calendarDate.getMonth() + 1, calendarDate.getFullYear()),
         getCalendarEvents(),
       ]);
 
       if (invoicesResult.success && invoicesResult.invoices.length > 0) {
-        setInvoices(invoicesResult.invoices as StoredInvoice[]);
+        setInvoices(dedupeInvoicesByInvoiceNumber(invoicesResult.invoices as StoredInvoice[]));
       }
 
       if (availabilityResult && availabilityResult.bookedDates) {
@@ -157,6 +193,8 @@ export default function Dashboard() {
       }
     }
 
+    await songsPromise;
+
     setIsRefreshing(false);
   };
 
@@ -165,6 +203,91 @@ export default function Dashboard() {
     invoices.filter(inv => !inv.deletedAt),
     [invoices]
   );
+
+  useEffect(() => {
+    const first = activeInvoices[0]?.invoiceNumber;
+    if (first && !probeInvoiceNumber) {
+      setProbeInvoiceNumber(first);
+    }
+  }, [activeInvoices, probeInvoiceNumber]);
+
+  const resolveProbeUrl = useCallback(
+    (ep: ReadOnlyApiEndpoint): string => {
+      if (ep.id === 'calendar-availability') {
+        return `${ep.path}?month=${calendarDate.getMonth() + 1}&year=${calendarDate.getFullYear()}`;
+      }
+      return `${ep.path}${ep.query ?? ''}`;
+    },
+    [calendarDate]
+  );
+
+  const runProbe = useCallback(
+    async (ep: ReadOnlyApiEndpoint) => {
+      setProbingId(ep.id);
+      const url = resolveProbeUrl(ep);
+      const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+      try {
+        const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+        const text = await res.text();
+        let bodyPreview = text;
+        try {
+          bodyPreview = JSON.stringify(JSON.parse(text), null, 2);
+        } catch {
+          /* leave raw */
+        }
+        if (bodyPreview.length > 8000) {
+          bodyPreview = `${bodyPreview.slice(0, 8000)}\n… (truncated)`;
+        }
+        const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : 0;
+        setProbeResults((r) => ({
+          ...r,
+          [ep.id]: { status: res.status, ms, bodyPreview },
+        }));
+      } catch (e) {
+        const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : 0;
+        setProbeResults((r) => ({
+          ...r,
+          [ep.id]: { status: 0, ms, bodyPreview: '', error: String(e) },
+        }));
+      }
+      setProbingId(null);
+    },
+    [resolveProbeUrl]
+  );
+
+  const runInvoiceByNumberProbe = useCallback(async () => {
+    const num = probeInvoiceNumber.trim();
+    if (!num) return;
+    const id = 'invoice-one';
+    setProbingId(id);
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    const url = `/api/invoices/${encodeURIComponent(num)}`;
+    try {
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      const text = await res.text();
+      let bodyPreview = text;
+      try {
+        bodyPreview = JSON.stringify(JSON.parse(text), null, 2);
+      } catch {
+        /* raw */
+      }
+      if (bodyPreview.length > 8000) {
+        bodyPreview = `${bodyPreview.slice(0, 8000)}\n… (truncated)`;
+      }
+      const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : 0;
+      setProbeResults((r) => ({
+        ...r,
+        [id]: { status: res.status, ms, bodyPreview },
+      }));
+    } catch (e) {
+      const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : 0;
+      setProbeResults((r) => ({
+        ...r,
+        [id]: { status: 0, ms, bodyPreview: '', error: String(e) },
+      }));
+    }
+    setProbingId(null);
+  }, [probeInvoiceNumber]);
 
   // Filter invoices by year
   const yearFilteredInvoices = useMemo(() =>
@@ -197,14 +320,22 @@ export default function Dashboard() {
   const isCompletedStatus = (status: string) =>
     status === 'completed' || status === 'archived';
 
+  /** Money recorded as fully received (not just lifecycle status “completed”). */
+  const isRecordedFullyPaid = useCallback((inv: StoredInvoice) => {
+    if (inv.paymentStatus === 'full') return true;
+    if (inv.status === 'balance_paid' || inv.status === 'paid') return true;
+    const bal = (inv.total ?? 0) - (inv.depositPaid ?? 0);
+    return bal <= 0.005;
+  }, []);
+
   // Calculate stats for selected year
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
-    // Paid = fully paid (handles legacy + new statuses)
-    const paid = yearFilteredInvoices.filter(inv => isFullyPaidStatus(inv.status));
+    // Paid = recorded full settlement (handles legacy + balance_paid + paymentStatus full)
+    const paid = yearFilteredInvoices.filter(inv => isRecordedFullyPaid(inv));
     // Pending = drafts + sent (not yet deposit received)
     const pending = yearFilteredInvoices.filter(inv =>
       isDraftStatus(inv.status) || isSentStatus(inv.status)
@@ -257,13 +388,13 @@ export default function Dashboard() {
       upcomingEvents: upcomingEvents.length,
       thisMonthEvents: thisMonthEvents.length,
     };
-  }, [yearFilteredInvoices, activeInvoices]);
+  }, [yearFilteredInvoices, activeInvoices, isRecordedFullyPaid]);
 
   // Calculate comparison year stats
   const compareStats = useMemo(() => {
     if (!compareYear || compareYearInvoices.length === 0) return null;
 
-    const paid = compareYearInvoices.filter(inv => isFullyPaidStatus(inv.status));
+    const paid = compareYearInvoices.filter(inv => isRecordedFullyPaid(inv));
     const totalRevenue = paid.reduce((sum, inv) => sum + inv.total, 0);
     const avgInvoiceValue = paid.length > 0 ? Math.round(totalRevenue / paid.length) : 0;
 
@@ -273,7 +404,7 @@ export default function Dashboard() {
       paidCount: paid.length,
       avgInvoiceValue,
     };
-  }, [compareYear, compareYearInvoices]);
+  }, [compareYear, compareYearInvoices, isRecordedFullyPaid]);
 
   // Calculate YoY growth
   const yoyGrowth = useMemo(() => {
@@ -293,19 +424,31 @@ export default function Dashboard() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
-    const sevenDaysFromNow = new Date(today);
-    sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-    const sevenDaysStr = sevenDaysFromNow.toISOString().split('T')[0];
+
+    // Use config-driven reminder windows
+    const balanceDays = siteConfig.reminders.balanceReminder;
+    const songDays = siteConfig.reminders.songConfirmation;
+
+    const balanceDaysFromNow = new Date(today);
+    balanceDaysFromNow.setDate(balanceDaysFromNow.getDate() + balanceDays);
+    const balanceDaysStr = balanceDaysFromNow.toISOString().split('T')[0];
+
+    const songDaysFromNow = new Date(today);
+    songDaysFromNow.setDate(songDaysFromNow.getDate() + songDays);
+    const songDaysStr = songDaysFromNow.toISOString().split('T')[0];
+
+    // Keep 14-day window for upcoming events display
     const fourteenDaysFromNow = new Date(today);
     fourteenDaysFromNow.setDate(fourteenDaysFromNow.getDate() + 14);
     const fourteenDaysStr = fourteenDaysFromNow.toISOString().split('T')[0];
+
     const sevenDaysAgo = new Date(today);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
 
     // Only consider active, non-cancelled invoices
     const relevantInvoices = activeInvoices.filter(inv =>
-      inv.status !== 'cancelled' && inv.status !== 'paid'
+      inv.status !== 'cancelled' && !isRecordedFullyPaid(inv)
     );
 
     // Missing phone numbers (future events)
@@ -325,32 +468,30 @@ export default function Dashboard() {
       inv.eventDate && inv.eventDate >= todayStr
     );
 
-    // Balance due soon (within 7 days of event, not fully paid)
+    // Balance due soon (within config-defined days of event, not fully paid)
     const balanceDueSoon = activeInvoices.filter(inv => {
-      if (inv.status === 'paid' || inv.status === 'cancelled') return false;
+      if (isRecordedFullyPaid(inv) || inv.status === 'cancelled') return false;
       if (!inv.eventDate) return false;
-      // Event is within next 7 days
-      if (inv.eventDate >= todayStr && inv.eventDate <= sevenDaysStr) {
-        // Has balance remaining
+      if (inv.eventDate >= todayStr && inv.eventDate <= balanceDaysStr) {
         const balance = inv.total - (inv.depositPaid || 0);
         return balance > 0;
       }
       return false;
     });
 
-    // Stale quotations (older than 7 days, not converted)
+    // Stale quotations (older than 7 days, not converted) — check both legacy 'draft' and new 'quotation_draft'
     const staleQuotations = activeInvoices.filter(inv =>
       inv.documentType === 'quotation' &&
-      inv.status === 'draft' &&
+      isDraftStatus(inv.status) &&
       inv.createdAt && inv.createdAt < sevenDaysAgoStr
     );
 
-    // Song confirmation due (2 weeks before event)
+    // Song confirmation due (config-defined days before event)
     const songConfirmationDue = activeInvoices.filter(inv => {
       if (inv.status === 'cancelled') return false;
       if (!inv.eventDate) return false;
-      // Event is within next 14 days but more than 7 days away
-      return inv.eventDate >= sevenDaysStr && inv.eventDate <= fourteenDaysStr;
+      // Event is within next songDays but more than balanceDays away
+      return inv.eventDate > balanceDaysStr && inv.eventDate <= songDaysStr;
     });
 
     // Upcoming events (next 14 days)
@@ -363,7 +504,7 @@ export default function Dashboard() {
       .sort((a, b) => (a.eventDate || '').localeCompare(b.eventDate || ''));
 
     const totalActionItems = missingPhone.length + missingVenue.length +
-      noDeposit.length + balanceDueSoon.length + staleQuotations.length;
+      noDeposit.length + balanceDueSoon.length + staleQuotations.length + songConfirmationDue.length;
 
     return {
       missingPhone,
@@ -375,7 +516,7 @@ export default function Dashboard() {
       upcomingEvents,
       totalActionItems,
     };
-  }, [activeInvoices]);
+  }, [activeInvoices, isRecordedFullyPaid]);
 
   // Router for navigation
   const router = useRouter();
@@ -397,46 +538,60 @@ export default function Dashboard() {
 
     switch (modalFilter) {
       case 'paid':
-        return yearFilteredInvoices.filter(inv => inv.status === 'paid');
+        return yearFilteredInvoices.filter(inv => isRecordedFullyPaid(inv));
       case 'pending':
-        return yearFilteredInvoices.filter(inv => inv.status === 'sent' || inv.status === 'draft');
+        return yearFilteredInvoices.filter(inv => isDraftStatus(inv.status) || isSentStatus(inv.status));
       case 'completed':
-        return yearFilteredInvoices.filter(inv => inv.status === 'paid' && inv.eventDate && inv.eventDate < todayStr);
+        return yearFilteredInvoices.filter(inv =>
+          isRecordedFullyPaid(inv) && inv.eventDate && inv.eventDate < todayStr
+        );
       case 'upcoming':
         return activeInvoices.filter(inv => inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
       case 'draft':
-        return yearFilteredInvoices.filter(inv => inv.status === 'draft');
+        return yearFilteredInvoices.filter(inv => isDraftStatus(inv.status));
+      case 'song-confirmation':
+        return activeInvoices.filter(inv => {
+          if (inv.status === 'cancelled') return false;
+          if (!inv.eventDate) return false;
+          const balDue2 = new Date(today);
+          balDue2.setDate(balDue2.getDate() + siteConfig.reminders.balanceReminder);
+          const songEnd = new Date(today);
+          songEnd.setDate(songEnd.getDate() + siteConfig.reminders.songConfirmation);
+          return inv.eventDate > balDue2.toISOString().split('T')[0] && inv.eventDate <= songEnd.toISOString().split('T')[0];
+        });
       case 'missing-phone':
         return activeInvoices.filter(inv => !inv.clientPhone && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
       case 'missing-venue':
         return activeInvoices.filter(inv => !inv.eventVenue && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
       case 'no-deposit':
         return activeInvoices.filter(inv => inv.documentType === 'invoice' && !inv.depositPaid && inv.status !== 'cancelled' && inv.eventDate && inv.eventDate >= todayStr);
-      case 'balance-due':
-        const sevenDaysFromNow = new Date(today);
-        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-        const sevenDaysStr = sevenDaysFromNow.toISOString().split('T')[0];
+      case 'balance-due': {
+        const balDue = new Date(today);
+        balDue.setDate(balDue.getDate() + siteConfig.reminders.balanceReminder);
+        const balDueStr = balDue.toISOString().split('T')[0];
         return activeInvoices.filter(inv => {
-          if (inv.status === 'paid' || inv.status === 'cancelled') return false;
+          if (isRecordedFullyPaid(inv) || inv.status === 'cancelled') return false;
           if (!inv.eventDate) return false;
-          if (inv.eventDate >= todayStr && inv.eventDate <= sevenDaysStr) {
+          if (inv.eventDate >= todayStr && inv.eventDate <= balDueStr) {
             const balance = inv.total - (inv.depositPaid || 0);
             return balance > 0;
           }
           return false;
         });
-      case 'stale-quotations':
-        const sevenDaysAgo = new Date(today);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+      }
+      case 'stale-quotations': {
+        const staleAgo = new Date(today);
+        staleAgo.setDate(staleAgo.getDate() - 7);
+        const staleAgoStr = staleAgo.toISOString().split('T')[0];
         return activeInvoices.filter(inv =>
-          inv.documentType === 'quotation' && inv.status === 'draft' && inv.createdAt && inv.createdAt < sevenDaysAgoStr
+          inv.documentType === 'quotation' && isDraftStatus(inv.status) && inv.createdAt && inv.createdAt < staleAgoStr
         );
+      }
       case 'all':
       default:
         return yearFilteredInvoices;
     }
-  }, [modalFilter, yearFilteredInvoices, activeInvoices]);
+  }, [modalFilter, yearFilteredInvoices, activeInvoices, isRecordedFullyPaid]);
 
   // Monthly revenue data for charts (full year for selected year)
   const monthlyData = useMemo(() => {
@@ -450,7 +605,7 @@ export default function Dashboard() {
 
     // Aggregate selected year data
     yearFilteredInvoices
-      .filter(inv => inv.status === 'paid')
+      .filter(inv => isRecordedFullyPaid(inv))
       .forEach(inv => {
         const date = new Date(inv.eventDate || inv.createdAt);
         const monthIndex = date.getMonth();
@@ -461,7 +616,7 @@ export default function Dashboard() {
     // Aggregate comparison year data
     if (compareYear) {
       compareYearInvoices
-        .filter(inv => inv.status === 'paid')
+        .filter(inv => isRecordedFullyPaid(inv))
         .forEach(inv => {
           const date = new Date(inv.eventDate || inv.createdAt);
           const monthIndex = date.getMonth();
@@ -471,7 +626,7 @@ export default function Dashboard() {
     }
 
     return data;
-  }, [yearFilteredInvoices, compareYearInvoices, compareYear]);
+  }, [yearFilteredInvoices, compareYearInvoices, compareYear, isRecordedFullyPaid]);
 
   // Status breakdown for pie chart
   const statusData = useMemo(() => {
@@ -480,7 +635,7 @@ export default function Dashboard() {
     const depositReceived = yearFilteredInvoices.filter(inv =>
       inv.status === 'deposit_received' || inv.status === 'invoice_sent'
     ).length;
-    const fullyPaid = yearFilteredInvoices.filter(inv => isFullyPaidStatus(inv.status)).length;
+    const fullyPaid = yearFilteredInvoices.filter(inv => isRecordedFullyPaid(inv)).length;
     const completed = yearFilteredInvoices.filter(inv => isCompletedStatus(inv.status)).length;
     const cancelled = yearFilteredInvoices.filter(inv => inv.status === 'cancelled').length;
 
@@ -492,7 +647,7 @@ export default function Dashboard() {
       { name: 'Completed', value: completed, color: '#8b5cf6' },
       { name: 'Cancelled', value: cancelled, color: '#ef4444' },
     ].filter(item => item.value > 0);
-  }, [yearFilteredInvoices]);
+  }, [yearFilteredInvoices, isRecordedFullyPaid]);
 
   // Package performance analytics
   const packageData = useMemo(() => {
@@ -500,7 +655,7 @@ export default function Dashboard() {
     const colors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899'];
 
     yearFilteredInvoices
-      .filter(inv => isFullyPaidStatus(inv.status))
+      .filter(inv => isRecordedFullyPaid(inv))
       .forEach(inv => {
         // Extract package name from items
         const packageItem = inv.items?.find(item =>
@@ -540,7 +695,7 @@ export default function Dashboard() {
         color: colors[index % colors.length],
       }))
       .sort((a, b) => b.count - a.count);
-  }, [yearFilteredInvoices]);
+  }, [yearFilteredInvoices, isRecordedFullyPaid]);
 
   // Conversion funnel data - tracks actual workflow stages
   const conversionData = useMemo(() => {
@@ -567,10 +722,7 @@ export default function Dashboard() {
     ).length;
 
     // Stage 4: Fully paid (balance received)
-    const fullyPaid = yearFilteredInvoices.filter(inv =>
-      isFullyPaidStatus(inv.status) ||
-      inv.paymentStatus === 'full'
-    ).length;
+    const fullyPaid = yearFilteredInvoices.filter(inv => isRecordedFullyPaid(inv)).length;
 
     // Stage 5: Events completed
     const eventsCompleted = yearFilteredInvoices.filter(inv =>
@@ -585,7 +737,7 @@ export default function Dashboard() {
       { stage: 'Fully Paid', count: fullyPaid, color: '#10b981' },
       { stage: 'Completed', count: eventsCompleted, color: '#8b5cf6' },
     ];
-  }, [yearFilteredInvoices]);
+  }, [yearFilteredInvoices, isRecordedFullyPaid]);
 
   // Lead source analytics with sub-category breakdown
   const leadSourceData = useMemo(() => {
@@ -673,7 +825,7 @@ export default function Dashboard() {
   // Refetch calendar availability when month changes
   useEffect(() => {
     const fetchCalendarAvailability = async () => {
-      if (!isGoogleSyncEnabled()) return;
+      if (!isStudioApiAvailable()) return;
 
       const result = await getAvailability(
         calendarDate.getMonth() + 1,
@@ -730,13 +882,30 @@ export default function Dashboard() {
     [activeInvoices]
   );
 
-  // Status icon
+  // Status icon — covers all new and legacy statuses
   const StatusIcon = ({ status }: { status: string }) => {
     switch (status) {
-      case 'paid': return <CheckCircle className="w-4 h-4 text-emerald-500" />;
-      case 'sent': return <Clock className="w-4 h-4 text-amber-500" />;
-      case 'cancelled': return <XCircle className="w-4 h-4 text-red-500" />;
-      default: return <AlertCircle className="w-4 h-4 text-slate-400" />;
+      case 'paid':
+      case 'balance_paid':
+        return <CheckCircle className="w-4 h-4 text-emerald-500" />;
+      case 'completed':
+        return <CheckCircle className="w-4 h-4 text-purple-500" />;
+      case 'archived':
+        return <FileText className="w-4 h-4 text-slate-400" />;
+      case 'deposit_received':
+        return <DollarSign className="w-4 h-4 text-teal-500" />;
+      case 'invoice_sent':
+      case 'sent':
+        return <Clock className="w-4 h-4 text-blue-500" />;
+      case 'quotation_sent':
+        return <Clock className="w-4 h-4 text-amber-500" />;
+      case 'quotation_draft':
+      case 'draft':
+        return <FileText className="w-4 h-4 text-slate-400" />;
+      case 'cancelled':
+        return <XCircle className="w-4 h-4 text-red-500" />;
+      default:
+        return <AlertCircle className="w-4 h-4 text-slate-400" />;
     }
   };
 
@@ -974,6 +1143,18 @@ export default function Dashboard() {
                   </div>
                 </button>
               )}
+              {actionItems.songConfirmationDue.length > 0 && (
+                <button
+                  onClick={() => openInvoiceModal('song-confirmation', `Song Confirmation Due (${siteConfig.reminders.songConfirmation}d)`)}
+                  className="flex items-center gap-2 bg-white hover:bg-purple-50 border border-purple-200 rounded-lg p-3 transition-colors text-left"
+                >
+                  <Music className="w-4 h-4 text-purple-500" />
+                  <div>
+                    <div className="text-sm font-medium text-purple-700">{actionItems.songConfirmationDue.length}</div>
+                    <div className="text-xs text-purple-600">Song List</div>
+                  </div>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -995,7 +1176,7 @@ export default function Dashboard() {
                 today.setHours(0, 0, 0, 0);
                 const daysUntil = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
                 const balance = inv.total - (inv.depositPaid || 0);
-                const isFullyPaid = inv.status === 'paid' || balance <= 0;
+                const isFullyPaid = isRecordedFullyPaid(inv);
 
                 return (
                   <Link
@@ -1154,6 +1335,169 @@ export default function Dashboard() {
             </div>
             <p className="text-2xl font-bold text-slate-800">{stats.conversionRate}%</p>
             <p className="text-xs text-purple-600 mt-1">Quotation → Invoice</p>
+          </div>
+        </div>
+
+        {/* Song library & read-only API smoke tests */}
+        <div className="grid lg:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                <Music className="w-5 h-5 text-violet-600 shrink-0" />
+                Song library
+              </h2>
+              <span className="text-xs text-slate-500">
+                {songsLoading ? 'Loading…' : `${songs.length} active`}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              Same repertoire as the marketing site and invoice picker — sourced from{' '}
+              <code className="text-violet-700 bg-violet-50 px-1 rounded">GET /api/songs</code>.
+            </p>
+            <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs text-slate-600 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Title</th>
+                    <th className="px-3 py-2 font-medium hidden sm:table-cell">Artist</th>
+                    <th className="px-3 py-2 font-medium hidden md:table-cell">Category</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {songs.length === 0 && !songsLoading ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-8 text-center text-slate-400 text-sm">
+                        No songs yet — run{' '}
+                        <code className="text-xs bg-slate-100 px-1 rounded">npm run db:seed-songs</code> against Neon.
+                      </td>
+                    </tr>
+                  ) : (
+                    songs.map((s) => (
+                      <tr key={s.id} className="hover:bg-slate-50/80">
+                        <td className="px-3 py-2 text-slate-800 font-medium">{s.title}</td>
+                        <td className="px-3 py-2 text-slate-600 hidden sm:table-cell">{s.artist}</td>
+                        <td className="px-3 py-2 text-slate-500 text-xs hidden md:table-cell">{s.category}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border border-slate-100">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-slate-600 shrink-0" />
+                API smoke tests
+              </h2>
+              <span className="text-[10px] uppercase tracking-wide text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+                GET only
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Calls your Next.js routes with this browser session. Routes marked “session” need you logged into the portal.
+            </p>
+            <ul className="space-y-2 max-h-56 overflow-y-auto pr-1 mb-4">
+              {READ_ONLY_API_ENDPOINTS.map((ep) => {
+                const result = probeResults[ep.id];
+                const authBadge =
+                  ep.auth === 'session' ? (
+                    <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">session</span>
+                  ) : (
+                    <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">public</span>
+                  );
+                return (
+                  <li
+                    key={ep.id}
+                    className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2 text-sm"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-slate-800">{ep.label}</span>
+                        {authBadge}
+                      </div>
+                      <code className="text-[11px] text-violet-700 break-all">
+                        GET {resolveProbeUrl(ep)}
+                      </code>
+                      {ep.description && (
+                        <p className="text-[11px] text-slate-500 mt-0.5">{ep.description}</p>
+                      )}
+                      {result && (
+                        <p className="text-[11px] mt-1">
+                          <span className={result.status >= 200 && result.status < 300 ? 'text-emerald-600' : 'text-amber-700'}>
+                            HTTP {result.status || '—'}
+                          </span>
+                          <span className="text-slate-400 ml-2">{result.ms}ms</span>
+                          {result.error && <span className="text-red-600 ml-2">{result.error}</span>}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => runProbe(ep)}
+                      disabled={probingId !== null}
+                      className="shrink-0 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-medium hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      <Play className="w-3 h-3" />
+                      Run
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <div className="border border-dashed border-slate-200 rounded-lg p-3 mb-3">
+              <div className="text-xs font-medium text-slate-700 mb-1">Invoice by number (session)</div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={probeInvoiceNumber}
+                  onChange={(e) => setProbeInvoiceNumber(e.target.value)}
+                  placeholder="INV-2026-001"
+                  className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => runInvoiceByNumberProbe()}
+                  disabled={probingId !== null || !probeInvoiceNumber.trim()}
+                  className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-violet-700 text-white text-xs font-medium hover:bg-violet-600 disabled:opacity-50"
+                >
+                  <Play className="w-3 h-3" />
+                  GET /api/invoices/[number]
+                </button>
+              </div>
+              {probeResults['invoice-one'] && (
+                <p className="text-[11px] mt-2">
+                  <span
+                    className={
+                      probeResults['invoice-one'].status >= 200 && probeResults['invoice-one'].status < 300
+                        ? 'text-emerald-600'
+                        : 'text-amber-700'
+                    }
+                  >
+                    HTTP {probeResults['invoice-one'].status || '—'}
+                  </span>
+                  <span className="text-slate-400 ml-2">{probeResults['invoice-one'].ms}ms</span>
+                </p>
+              )}
+            </div>
+
+            {Object.keys(probeResults).length > 0 && (
+              <details className="group">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700 hover:text-amber-700">
+                  Response previews ({Object.keys(probeResults).length})
+                </summary>
+                <div className="mt-2 space-y-3 max-h-64 overflow-y-auto">
+                  {Object.entries(probeResults).map(([id, res]) => (
+                    <div key={id} className="rounded-lg border border-slate-200 bg-slate-900 text-slate-100 p-3">
+                      <div className="text-[10px] text-slate-400 mb-1 font-mono">{id}</div>
+                      <pre className="text-[11px] whitespace-pre-wrap break-words overflow-x-auto">{res.bodyPreview || res.error || '(empty)'}</pre>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
         </div>
 
@@ -1581,7 +1925,7 @@ export default function Dashboard() {
                     today.setHours(0, 0, 0, 0);
                     const daysUntil = eventDate ? Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
                     const balance = inv.total - (inv.depositPaid || 0);
-                    const isFullyPaid = inv.status === 'paid' || balance <= 0;
+                    const isFullyPaid = isRecordedFullyPaid(inv);
 
                     return (
                       <Link
@@ -1601,7 +1945,7 @@ export default function Dashboard() {
                           </div>
                         ) : (
                           <div className={`w-14 h-14 rounded-xl flex items-center justify-center shrink-0 ${
-                            inv.status === 'paid' ? 'bg-emerald-100' :
+                            isFullyPaid ? 'bg-emerald-100' :
                             inv.status === 'sent' ? 'bg-amber-100' :
                             inv.status === 'cancelled' ? 'bg-red-100' :
                             'bg-slate-100'

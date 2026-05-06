@@ -1,23 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
-import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, ExternalLink, Settings, LayoutDashboard, Home, Search, ChevronLeft, ArrowUpDown, Phone, MapPin, DollarSign, AlertCircle, Download } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
+import { Printer, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, Percent, Save, History, X, FileText, Calendar, ChevronRight, Cloud, CloudOff, RefreshCw, MessageCircle, Send, Receipt, CheckCircle, Settings, LayoutDashboard, Home, Search, ChevronLeft, ArrowUpDown, Phone, MapPin, DollarSign, AlertCircle, Download, Music } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 import { isAuthenticated as checkAuth, login as doLogin } from '@/lib/auth';
 import { useCloudConfig } from '@/lib/cloud-config';
 import {
-  saveInvoiceToGoogle,
+  persistInvoice,
   createCalendarEvent,
   syncAllInvoices,
-  isGoogleSyncEnabled,
-  fetchInvoicesFromCloud,
+  isStudioApiAvailable,
+  fetchInvoices,
   fetchLatestInvoiceNumber,
   migrateInvoiceStatus,
-  type StoredInvoice as GoogleStoredInvoice,
+  type StoredInvoice as ApiStoredInvoice,
   type SyncStatus,
-} from '@/lib/google-sync';
+} from '@/lib/studio-api';
 import {
   generateQuotationMessage,
   generateConfirmationMessage,
@@ -28,14 +28,21 @@ import {
   messageTemplates,
   type MessageTemplateId,
 } from '@/lib/whatsapp-templates';
+import { dedupeInvoicesByInvoiceNumber, normalizeInvoiceNumber } from '@/lib/invoice-dedupe';
 
 // Password is now managed by shared auth module (@/lib/auth)
 
 // Storage key for localStorage (derived from business name)
 const STORAGE_KEY = 'studio_invoices';
 
-// Google Sheet URL for viewing inquiries (optional)
-const GOOGLE_SHEET_URL = process.env.NEXT_PUBLIC_GOOGLE_SHEET_URL || '';
+/** One canonical row per invoice number (fixes duplicate history from merge quirks). */
+function finalizeInvoiceList(list: StoredInvoice[]): StoredInvoice[] {
+  return dedupeInvoicesByInvoiceNumber(list);
+}
+
+function sameInvoiceNumber(a: string, b: string): boolean {
+  return normalizeInvoiceNumber(a) === normalizeInvoiceNumber(b);
+}
 
 interface InvoiceItem {
   id: string;
@@ -86,7 +93,7 @@ interface StoredInvoice {
   createdAt: string;
   status: InvoiceStatus;
   linkedQuotationNumber?: string; // Original quotation number when converted to invoice
-  linkedQuotation?: string; // Same field but from Google Sheets (column header "Linked Quotation")
+  linkedQuotation?: string; // Legacy alias for linkedQuotationNumber
   convertedAt?: string; // When quotation was converted to invoice
   deletedAt?: string; // Soft delete timestamp
   leadSource?: LeadSource;
@@ -104,7 +111,16 @@ interface StoredInvoice {
   receiptSentDate?: string;
   eventCompletedDate?: string;
   feedbackStatus?: FeedbackStatus;
+  notes?: string;
+  songSelections?: Array<{ songId: string; title?: string; artist?: string }>;
+  /** Present when loaded from API — used to pick the newest duplicate */
+  updatedAt?: string;
 }
+
+/** Fields that must persist immediately when setState and save run in the same tick (React 18 batching). */
+type SaveInvoiceOverrides = Partial<
+  Pick<StoredInvoice, 'depositPaid' | 'paymentStatus' | 'depositReceivedDate' | 'balanceReceivedDate' | 'eventCompletedDate' | 'receiptSentDate' | 'feedbackStatus'>
+>;
 
 function InvoiceGeneratorContent() {
   // URL params for auto-loading specific invoice
@@ -119,7 +135,6 @@ function InvoiceGeneratorContent() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
-  // Cloud config for packages/addons (fetched from Google Sheets)
   const { packages: cloudPackages, addons: cloudAddons, isLoading: configLoading, refresh: refreshConfig } = useCloudConfig();
 
   // History panel
@@ -158,8 +173,7 @@ function InvoiceGeneratorContent() {
 
   // Get quotation numbers that have been converted to invoices
   // These should be hidden from history to avoid confusion
-  // Note: Google Sheets uses "linkedQuotation" (from header "Linked Quotation")
-  // while localStorage uses "linkedQuotationNumber" - check both
+  // Legacy: cloud rows may use "linkedQuotation"; localStorage uses "linkedQuotationNumber" — check both
   const invoicesWithLinkedQuotation = savedInvoices.filter(
     inv => inv.documentType === 'invoice' && (inv.linkedQuotationNumber || inv.linkedQuotation)
   );
@@ -167,16 +181,19 @@ function InvoiceGeneratorContent() {
 
   const convertedQuotationNumbers = new Set(
     invoicesWithLinkedQuotation
-      .map(inv => inv.linkedQuotationNumber || inv.linkedQuotation)
-      .filter((num): num is string => !!num)
+      .flatMap(inv => [inv.linkedQuotationNumber, inv.linkedQuotation])
+      .filter((num): num is string => typeof num === 'string' && num.trim().length > 0)
+      .map((num) => normalizeInvoiceNumber(num.trim()))
   );
-
 
   // Apply all filters - exclude quotations that have been converted to invoices
   const activeInvoices = savedInvoices.filter(inv => {
     if (inv.deletedAt) return false;
-    // Hide quotations that have been converted to invoices
-    if (inv.documentType === 'quotation' && convertedQuotationNumbers.has(inv.invoiceNumber)) {
+    // Hide quotations that have been converted to invoices (normalize refs — QUO-2026-1 vs QUO-2026-001)
+    if (
+      inv.documentType === 'quotation' &&
+      convertedQuotationNumbers.has(normalizeInvoiceNumber(inv.invoiceNumber))
+    ) {
       return false;
     }
     return true;
@@ -211,6 +228,13 @@ function InvoiceGeneratorContent() {
   const isFullyPaidStatus = (status: InvoiceStatus) =>
     status === 'paid' || status === 'balance_paid';
 
+  const invoiceRecordedFullyPaid = (inv: StoredInvoice) => {
+    if (inv.paymentStatus === 'full') return true;
+    if (isFullyPaidStatus(inv.status)) return true;
+    const bal = (inv.total ?? 0) - (inv.depositPaid ?? 0);
+    return bal <= 0.005;
+  };
+
   const filteredInvoices = (historyTab === 'deleted' ? yearFilteredDeleted : yearFilteredActive)
     .filter(inv => {
       // Status filter (for non-deleted) - use helper functions for new status system
@@ -218,7 +242,7 @@ function InvoiceGeneratorContent() {
         if (historyTab === 'drafts' && !isDraftStatus(inv.status)) return false;
         if (historyTab === 'sent' && !isSentStatus(inv.status)) return false;
         if (historyTab === 'deposit' && !isDepositReceivedStatus(inv.status)) return false;
-        if (historyTab === 'paid' && !isFullyPaidStatus(inv.status)) return false;
+        if (historyTab === 'paid' && !invoiceRecordedFullyPaid(inv)) return false;
         if (historyTab === 'completed' && !isCompletedStatus(inv.status)) return false;
       }
       // Search filter
@@ -250,7 +274,7 @@ function InvoiceGeneratorContent() {
     drafts: yearFilteredActive.filter(inv => isDraftStatus(inv.status)).length,
     sent: yearFilteredActive.filter(inv => isSentStatus(inv.status)).length,
     deposit: yearFilteredActive.filter(inv => isDepositReceivedStatus(inv.status)).length,
-    paid: yearFilteredActive.filter(inv => isFullyPaidStatus(inv.status)).length,
+    paid: yearFilteredActive.filter(inv => invoiceRecordedFullyPaid(inv)).length,
     completed: yearFilteredActive.filter(inv => isCompletedStatus(inv.status)).length,
     deleted: yearFilteredDeleted.length,
   };
@@ -259,8 +283,8 @@ function InvoiceGeneratorContent() {
   const summaryStats = {
     total: yearFilteredActive.length,
     totalValue: yearFilteredActive.reduce((sum, inv) => sum + inv.total, 0),
-    collected: yearFilteredActive.filter(inv => isFullyPaidStatus(inv.status)).reduce((sum, inv) => sum + inv.total, 0),
-    pending: yearFilteredActive.filter(inv => !isFullyPaidStatus(inv.status) && inv.status !== 'cancelled').reduce((sum, inv) => sum + inv.total, 0),
+    collected: yearFilteredActive.filter(inv => invoiceRecordedFullyPaid(inv)).reduce((sum, inv) => sum + inv.total, 0),
+    pending: yearFilteredActive.filter(inv => !invoiceRecordedFullyPaid(inv) && inv.status !== 'cancelled').reduce((sum, inv) => sum + inv.total, 0),
     deposits: yearFilteredActive.reduce((sum, inv) => sum + (inv.depositPaid || 0), 0),
   };
 
@@ -311,8 +335,10 @@ function InvoiceGeneratorContent() {
       const rawLocalInvoices: StoredInvoice[] = stored ? JSON.parse(stored) : [];
 
       // Apply migration to convert legacy statuses
-      const localInvoices = rawLocalInvoices.map(inv =>
-        migrateInvoiceStatus(inv as GoogleStoredInvoice) as StoredInvoice
+      const localInvoices = finalizeInvoiceList(
+        rawLocalInvoices.map(inv =>
+          migrateInvoiceStatus(inv as ApiStoredInvoice) as StoredInvoice
+        )
       );
 
       if (localInvoices.length > 0) {
@@ -322,13 +348,13 @@ function InvoiceGeneratorContent() {
       }
 
       // Then try to fetch from cloud
-      if (isGoogleSyncEnabled()) {
+      if (isStudioApiAvailable()) {
         setSyncStatus('syncing');
 
         try {
           // Fetch invoices and latest number in parallel
           const [invoicesResult, numbersResult] = await Promise.all([
-            fetchInvoicesFromCloud(),
+            fetchInvoices(),
             fetchLatestInvoiceNumber(),
           ]);
 
@@ -336,46 +362,45 @@ function InvoiceGeneratorContent() {
           if (invoicesResult.success && invoicesResult.invoices.length > 0) {
             const cloudInvoices = invoicesResult.invoices as StoredInvoice[];
 
-            // Build lookup maps
-            const cloudMap = new Map(cloudInvoices.map(inv => [inv.invoiceNumber, inv]));
-            const localMap = new Map(localInvoices.map(inv => [inv.invoiceNumber, inv]));
+            // Canonical keys — avoids treating QUO-2026-1 and QUO-2026-001 as two bookings
+            const cloudMap = new Map(
+              cloudInvoices.map((inv) => [normalizeInvoiceNumber(inv.invoiceNumber), inv])
+            );
+            const localMap = new Map(
+              localInvoices.map((inv) => [normalizeInvoiceNumber(inv.invoiceNumber), inv])
+            );
 
-            // Merge logic: for each invoice, decide which version to keep
             const mergedMap = new Map<string, StoredInvoice>();
 
-            // Add all cloud invoices first
             for (const cloud of cloudInvoices) {
-              const local = localMap.get(cloud.invoiceNumber);
+              const nk = normalizeInvoiceNumber(cloud.invoiceNumber);
+              const cloudCanon = { ...cloud, invoiceNumber: nk };
+              const local = localMap.get(nk);
               if (local) {
-                // Both exist - merge with preference for more recent deletedAt/status
-                if (local.deletedAt && !cloud.deletedAt) {
-                  // Local was deleted but cloud wasn't - keep local deletion
-                  mergedMap.set(cloud.invoiceNumber, local);
-                } else if (cloud.deletedAt && !local.deletedAt) {
-                  // Cloud was deleted but local wasn't - keep cloud deletion
-                  mergedMap.set(cloud.invoiceNumber, cloud);
+                const localCanon = { ...local, invoiceNumber: nk };
+                if (localCanon.deletedAt && !cloudCanon.deletedAt) {
+                  mergedMap.set(nk, localCanon);
+                } else if (cloudCanon.deletedAt && !localCanon.deletedAt) {
+                  mergedMap.set(nk, cloudCanon);
                 } else {
-                  // Both have same deletion state - prefer cloud (source of truth)
-                  // But preserve local deletedAt if it exists
-                  mergedMap.set(cloud.invoiceNumber, {
-                    ...cloud,
-                    deletedAt: cloud.deletedAt || local.deletedAt,
+                  mergedMap.set(nk, {
+                    ...cloudCanon,
+                    deletedAt: cloudCanon.deletedAt || localCanon.deletedAt,
                   });
                 }
               } else {
-                // Only in cloud
-                mergedMap.set(cloud.invoiceNumber, cloud);
+                mergedMap.set(nk, cloudCanon);
               }
             }
 
-            // Add local-only invoices (not in cloud)
             for (const local of localInvoices) {
-              if (!cloudMap.has(local.invoiceNumber)) {
-                mergedMap.set(local.invoiceNumber, local);
+              const nk = normalizeInvoiceNumber(local.invoiceNumber);
+              if (!cloudMap.has(nk)) {
+                mergedMap.set(nk, { ...local, invoiceNumber: nk });
               }
             }
 
-            const mergedInvoices = Array.from(mergedMap.values());
+            const mergedInvoices = finalizeInvoiceList(Array.from(mergedMap.values()));
             setSavedInvoices(mergedInvoices);
 
             // Update localStorage with merged data
@@ -391,7 +416,7 @@ function InvoiceGeneratorContent() {
           } else if (invoicesResult.success && invoicesResult.invoices.length === 0) {
             // Cloud is empty, push local to cloud
             if (localInvoices.length > 0) {
-              await syncAllInvoices(localInvoices as GoogleStoredInvoice[]);
+              await syncAllInvoices(localInvoices as ApiStoredInvoice[]);
             }
           }
 
@@ -493,6 +518,70 @@ function InvoiceGeneratorContent() {
   // Line items
   const [items, setItems] = useState<InvoiceItem[]>([]);
 
+  // Internal notes (not printed on PDF)
+  const [notes, setNotes] = useState('');
+
+  /** Repertoire picks — persisted to Neon (`song_selections`) */
+  const [songSelections, setSongSelections] = useState<Array<{ songId: string; title?: string; artist?: string }>>([]);
+  const [songLibrary, setSongLibrary] = useState<
+    Array<{
+      id: string;
+      title: string;
+      artist: string;
+      category: string;
+      language: string;
+      popularity: number;
+      mood: string[];
+      recommended_for: string[];
+    }>
+  >([]);
+  const [songPickSearch, setSongPickSearch] = useState('');
+
+  const filteredSongPickList = useMemo(() => {
+    const q = songPickSearch.trim().toLowerCase();
+    const selectedIds = new Set(songSelections.map((s) => s.songId));
+    return songLibrary
+      .filter((s) => !selectedIds.has(s.id))
+      .filter((s) => {
+        if (!q) return true;
+        return (
+          s.title.toLowerCase().includes(q) ||
+          s.artist.toLowerCase().includes(q) ||
+          s.category.toLowerCase().includes(q) ||
+          s.language.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 60);
+  }, [songLibrary, songPickSearch, songSelections]);
+
+  const addSongPick = (song: (typeof songLibrary)[0]) => {
+    setSongSelections((prev) => {
+      if (prev.some((p) => p.songId === song.id)) return prev;
+      return [...prev, { songId: song.id, title: song.title, artist: song.artist }];
+    });
+  };
+
+  const removeSongPick = (songId: string) => {
+    setSongSelections((prev) => prev.filter((s) => s.songId !== songId));
+  };
+
+  /** Load repertoire from DB for picker (public GET /api/songs) */
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    fetch('/api/songs', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data: { success?: boolean; songs?: typeof songLibrary }) => {
+        if (!cancelled && data?.success && Array.isArray(data.songs)) {
+          setSongLibrary(data.songs);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
   // Payment
   const [depositRequested, setDepositRequested] = useState(0); // For quotations
   const [depositPaid, setDepositPaid] = useState(0);           // For invoices
@@ -504,12 +593,19 @@ function InvoiceGeneratorContent() {
   const discountAmount = discountType === 'percent' ? (subtotal * discount / 100) : discount;
   const totalAfterDiscount = subtotal - discountAmount;
   const balanceDue = totalAfterDiscount - depositPaid;
+  const showBalanceSettled =
+    paymentStatus === 'full' ||
+    currentStatus === 'balance_paid' ||
+    currentStatus === 'paid' ||
+    balanceDue <= 0.005;
+  const displayBalanceDue = showBalanceSettled ? 0 : balanceDue;
 
   // Track unsaved changes by comparing current state to last saved state
   const currentFormState = JSON.stringify({
     clientName, clientPhone, clientEmail, clientAddress,
     eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
-    items, discount, discountType, depositRequested, depositPaid, leadSource, collaborationPartner,
+    items, discount, discountType, depositRequested, depositPaid, leadSource, collaborationPartner, notes,
+    songSelections,
   });
 
   // Track unsaved changes - compare current form to last saved state
@@ -517,13 +613,17 @@ function InvoiceGeneratorContent() {
     // For new invoices (no loaded ID), any data means unsaved changes
     if (!currentLoadedId && lastSavedState === '') {
       // New invoice - check if any meaningful data has been entered
-      const hasData = Boolean(clientName) || Boolean(eventDate) || items.length > 0;
+      const hasData =
+        Boolean(clientName) ||
+        Boolean(eventDate) ||
+        items.length > 0 ||
+        songSelections.length > 0;
       setHasUnsavedChanges(hasData);
     } else if (lastSavedState !== '') {
       // Loaded or previously saved - compare to last state
       setHasUnsavedChanges(currentFormState !== lastSavedState);
     }
-  }, [currentFormState, lastSavedState, currentLoadedId, clientName, eventDate, items.length]);
+  }, [currentFormState, lastSavedState, currentLoadedId, clientName, eventDate, items.length, songSelections.length]);
 
   // Format time for display
   const formattedTime = `${eventTimeHour}:${eventTimeMinute} ${eventTimePeriod}`;
@@ -699,18 +799,26 @@ function InvoiceGeneratorContent() {
   };
 
   // Save invoice to localStorage
-  const saveInvoice = (status: StoredInvoice['status'] = 'draft') => {
+  const saveInvoice = (status: StoredInvoice['status'] = 'draft', overrides?: SaveInvoiceOverrides) => {
+    const effectiveDepositPaid = overrides?.depositPaid ?? depositPaid;
+    const effectivePaymentStatus = (overrides?.paymentStatus ?? paymentStatus) || 'none';
+    const effectiveDepositReceivedDate = overrides?.depositReceivedDate ?? depositReceivedDate;
+    const effectiveBalanceReceivedDate = overrides?.balanceReceivedDate ?? balanceReceivedDate;
+    const effectiveEventCompletedDate = overrides?.eventCompletedDate ?? eventCompletedDate;
+    const effectiveReceiptSentDate = overrides?.receiptSentDate ?? receiptSentDate;
+    const effectiveFeedbackStatus = (overrides?.feedbackStatus ?? feedbackStatus) || 'pending';
+
     // Check if updating existing by ID or creating new
     const existingIndex = currentLoadedId
       ? savedInvoices.findIndex(inv => inv.id === currentLoadedId)
-      : savedInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
+      : savedInvoices.findIndex(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
 
     // Preserve original createdAt if updating existing
     const existingInvoice = existingIndex >= 0 ? savedInvoices[existingIndex] : null;
 
     const invoice: StoredInvoice = {
       id: currentLoadedId || Date.now().toString(),
-      invoiceNumber,
+      invoiceNumber: normalizeInvoiceNumber(invoiceNumber),
       documentType,
       clientName,
       clientPhone,
@@ -726,24 +834,26 @@ function InvoiceGeneratorContent() {
       discount,
       discountType,
       depositRequested: documentType === 'quotation' ? (depositRequested || undefined) : undefined,
-      depositPaid,
+      depositPaid: effectiveDepositPaid,
       total: totalAfterDiscount,
       createdAt: existingInvoice?.createdAt || new Date().toISOString(),
       status,
-      linkedQuotationNumber: linkedQuotationNumber || undefined,
+      linkedQuotationNumber: linkedQuotationNumber ? normalizeInvoiceNumber(linkedQuotationNumber) : undefined,
       convertedAt: existingInvoice?.convertedAt || (linkedQuotationNumber ? new Date().toISOString() : undefined),
       leadSource: leadSource || undefined,
       collaborationPartner: ['Collaboration', 'Referral', 'Other'].includes(leadSource) ? collaborationPartner : undefined,
       // New tracking fields
-      paymentStatus: paymentStatus || 'none',
-      depositReceivedDate: depositReceivedDate,
-      balanceReceivedDate: balanceReceivedDate,
+      paymentStatus: effectivePaymentStatus,
+      depositReceivedDate: effectiveDepositReceivedDate,
+      balanceReceivedDate: effectiveBalanceReceivedDate,
       calendarEventId: calendarEventId,
       calendarCreated: calendarCreated,
       invoiceSentDate: invoiceSentDate,
-      receiptSentDate: receiptSentDate,
-      eventCompletedDate: eventCompletedDate,
-      feedbackStatus: feedbackStatus || 'pending',
+      receiptSentDate: effectiveReceiptSentDate,
+      eventCompletedDate: effectiveEventCompletedDate,
+      feedbackStatus: effectiveFeedbackStatus,
+      notes: notes || undefined,
+      songSelections: songSelections.length > 0 ? songSelections : undefined,
     };
 
     let updatedInvoices: StoredInvoice[];
@@ -755,29 +865,30 @@ function InvoiceGeneratorContent() {
       updatedInvoices = [invoice, ...savedInvoices];
     }
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedInvoices));
-    setSavedInvoices(updatedInvoices);
+    const finalized = finalizeInvoiceList(updatedInvoices);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(finalized));
+    setSavedInvoices(finalized);
+
+    setInvoiceNumber(invoice.invoiceNumber);
 
     // Reset current loaded ID after saving
     setCurrentLoadedId(invoice.id);
 
-    // Sync to Google Sheets (if configured)
-    if (isGoogleSyncEnabled()) {
+    if (isStudioApiAvailable()) {
       setSyncStatus('syncing');
-      saveInvoiceToGoogle(invoice as GoogleStoredInvoice)
+      persistInvoice(invoice as ApiStoredInvoice)
         .then((result) => {
           if (result.success) {
             setSyncStatus('synced');
             setLastSyncTime(new Date());
-            console.log('Synced to Google Sheets');
           } else {
             setSyncStatus('error');
-            console.error('Google sync failed:', result.error);
+            console.error('Database sync failed:', result.error);
           }
         })
         .catch((err) => {
           setSyncStatus('error');
-          console.error('Google sync failed:', err);
+          console.error('Database sync failed:', err);
         });
     }
 
@@ -785,7 +896,8 @@ function InvoiceGeneratorContent() {
     setLastSavedState(JSON.stringify({
       clientName, clientPhone, clientEmail, clientAddress,
       eventType, eventDate, eventTimeHour, eventTimeMinute, eventTimePeriod, eventVenue,
-      items, discount, discountType, depositRequested, depositPaid, leadSource, collaborationPartner,
+      items, discount, discountType, depositRequested, depositPaid: effectiveDepositPaid, leadSource, collaborationPartner, notes,
+      songSelections,
     }));
     setHasUnsavedChanges(false);
 
@@ -810,8 +922,8 @@ function InvoiceGeneratorContent() {
     if (latestNumbers?.nextInvoice) {
       // Use cached latest numbers
       newInvoiceNumber = latestNumbers.nextInvoice;
-    } else if (isGoogleSyncEnabled()) {
-      // Fetch fresh from Google Sheets
+    } else if (isStudioApiAvailable()) {
+      // Fetch next invoice numbers from API
       const result = await fetchLatestInvoiceNumber();
       if (result.success) {
         newInvoiceNumber = result.nextInvoice;
@@ -828,7 +940,7 @@ function InvoiceGeneratorContent() {
       newInvoiceNumber = getNextLocalInvoiceNumber();
     }
 
-    setLinkedQuotationNumber(originalQuoNumber);
+    setLinkedQuotationNumber(normalizeInvoiceNumber(originalQuoNumber));
     setInvoiceNumber(newInvoiceNumber);
     setDocumentType('invoice');
     setInvoiceDate(new Date().toISOString().split('T')[0]);
@@ -863,7 +975,7 @@ function InvoiceGeneratorContent() {
     // Try to get latest number from cloud
     let nextNumber = latestNumbers?.nextQuotation;
 
-    if (!nextNumber && isGoogleSyncEnabled()) {
+    if (!nextNumber && isStudioApiAvailable()) {
       // Fetch fresh if not cached
       const result = await fetchLatestInvoiceNumber();
       if (result.success) {
@@ -908,6 +1020,9 @@ function InvoiceGeneratorContent() {
     setLinkedQuotationNumber(null);
     setLeadSource('');
     setCollaborationPartner('');
+    setNotes('');
+    setSongSelections([]);
+    setSongPickSearch('');
     // Reset new tracking fields
     setPaymentStatus('none');
     setFeedbackStatus('pending');
@@ -923,8 +1038,9 @@ function InvoiceGeneratorContent() {
   // Load invoice from history
   const loadInvoice = useCallback((invoice: StoredInvoice) => {
     setCurrentLoadedId(invoice.id);
-    // Handle both field names (localStorage uses linkedQuotationNumber, Google Sheets uses linkedQuotation)
-    setLinkedQuotationNumber(invoice.linkedQuotationNumber || invoice.linkedQuotation || null);
+    // Legacy field names: linkedQuotationNumber vs linkedQuotation
+    const link = invoice.linkedQuotationNumber || invoice.linkedQuotation;
+    setLinkedQuotationNumber(link ? normalizeInvoiceNumber(link) : null);
     setDocumentType(invoice.documentType);
     setInvoiceNumber(invoice.invoiceNumber);
     setCurrentStatus(invoice.status);
@@ -960,6 +1076,8 @@ function InvoiceGeneratorContent() {
     setInvoiceSentDate(invoice.invoiceSentDate);
     setReceiptSentDate(invoice.receiptSentDate);
     setEventCompletedDate(invoice.eventCompletedDate);
+    setNotes(invoice.notes || '');
+    setSongSelections(invoice.songSelections ?? []);
 
     // Set last saved state for change tracking
     setLastSavedState(JSON.stringify({
@@ -972,8 +1090,8 @@ function InvoiceGeneratorContent() {
       depositRequested: invoice.depositRequested || 0,
       depositPaid: invoice.depositPaid, leadSource: invoice.leadSource || '',
       collaborationPartner: invoice.collaborationPartner || '',
-      paymentStatus: invoice.paymentStatus || 'none',
-      feedbackStatus: invoice.feedbackStatus || 'pending',
+      notes: invoice.notes || '',
+      songSelections: invoice.songSelections ?? [],
     }));
     setHasUnsavedChanges(false);
   }, []);
@@ -981,7 +1099,9 @@ function InvoiceGeneratorContent() {
   // Auto-load invoice from URL param (e.g., /invoice?load=INV-2026-001)
   useEffect(() => {
     if (loadInvoiceNumber && savedInvoices.length > 0 && !hasAutoLoaded) {
-      const invoiceToLoad = savedInvoices.find(inv => inv.invoiceNumber === loadInvoiceNumber);
+      const invoiceToLoad = savedInvoices.find(inv =>
+        loadInvoiceNumber ? sameInvoiceNumber(inv.invoiceNumber, loadInvoiceNumber) : false
+      );
       if (invoiceToLoad) {
         loadInvoice(invoiceToLoad);
         setHasAutoLoaded(true);
@@ -991,7 +1111,7 @@ function InvoiceGeneratorContent() {
 
   // Delete invoice from history - uses invoiceNumber as unique identifier
   const deleteInvoice = (invoiceNumber: string) => {
-    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    const targetInvoice = savedInvoices.find(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
     if (!targetInvoice) {
       console.error('[Delete] Invoice not found:', invoiceNumber);
       return;
@@ -1000,16 +1120,19 @@ function InvoiceGeneratorContent() {
     if (confirm(`Delete "${targetInvoice.clientName}" (${invoiceNumber})? It will be moved to Deleted tab.`)) {
       // Soft delete: mark as deleted instead of removing
       const updated = savedInvoices.map(inv =>
-        inv.invoiceNumber === invoiceNumber ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const } : inv
+        sameInvoiceNumber(inv.invoiceNumber, invoiceNumber)
+          ? { ...inv, deletedAt: new Date().toISOString(), status: 'cancelled' as const }
+          : inv
       );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setSavedInvoices(updated);
+      const finalized = finalizeInvoiceList(updated);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(finalized));
+      setSavedInvoices(finalized);
 
-      // Sync deletion to Google Sheets
-      const deletedInvoice = updated.find(inv => inv.invoiceNumber === invoiceNumber);
-      if (deletedInvoice && isGoogleSyncEnabled()) {
+      // Sync soft-delete to database
+      const deletedInvoice = finalized.find(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
+      if (deletedInvoice && isStudioApiAvailable()) {
         setSyncStatus('syncing');
-        saveInvoiceToGoogle(deletedInvoice as GoogleStoredInvoice)
+        persistInvoice(deletedInvoice as ApiStoredInvoice)
           .then((result) => {
             if (result.success) {
               setSyncStatus('synced');
@@ -1025,17 +1148,21 @@ function InvoiceGeneratorContent() {
 
   // Restore a soft-deleted invoice - uses invoiceNumber as unique identifier
   const restoreInvoice = (invoiceNumber: string) => {
-    const updated = savedInvoices.map(inv =>
-      inv.invoiceNumber === invoiceNumber ? { ...inv, deletedAt: undefined, status: 'draft' as const } : inv
-    );
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    setSavedInvoices(updated);
+    const updated = savedInvoices.map(inv => {
+      if (!sameInvoiceNumber(inv.invoiceNumber, invoiceNumber)) return inv;
+      // Restore to the correct draft status based on document type
+      const restoredStatus: InvoiceStatus = inv.documentType === 'quotation' ? 'quotation_draft' : 'draft';
+      return { ...inv, deletedAt: undefined, status: restoredStatus };
+    });
+    const finalizedRestore = finalizeInvoiceList(updated);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(finalizedRestore));
+    setSavedInvoices(finalizedRestore);
 
-    // Sync restoration to Google Sheets
-    const restoredInvoice = updated.find(inv => inv.invoiceNumber === invoiceNumber);
-    if (restoredInvoice && isGoogleSyncEnabled()) {
+    // Sync restoration to database
+    const restoredInvoice = finalizedRestore.find(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
+    if (restoredInvoice && isStudioApiAvailable()) {
       setSyncStatus('syncing');
-      saveInvoiceToGoogle(restoredInvoice as GoogleStoredInvoice)
+      persistInvoice(restoredInvoice as ApiStoredInvoice)
         .then((result) => {
           if (result.success) {
             setSyncStatus('synced');
@@ -1050,21 +1177,46 @@ function InvoiceGeneratorContent() {
 
   // Permanently delete an invoice - uses invoiceNumber as unique identifier
   const permanentlyDeleteInvoice = (invoiceNumber: string) => {
-    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    const targetInvoice = savedInvoices.find(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
     if (!targetInvoice) return;
 
     if (confirm(`Permanently delete "${targetInvoice.clientName}" (${invoiceNumber})? This cannot be undone.`)) {
-      const updated = savedInvoices.filter(inv => inv.invoiceNumber !== invoiceNumber);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setSavedInvoices(updated);
-      // Note: This doesn't delete from Google Sheets - manual cleanup needed
+      const updated = savedInvoices.filter(inv => !sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
+      const finalized = finalizeInvoiceList(updated);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(finalized));
+      setSavedInvoices(finalized);
+      // Note: permanent delete is local-only unless you add a server DELETE route
+    }
+  };
+
+  // Fully settle payment from the history panel without loading the invoice into the form
+  const quickMarkFullyPaid = (invoice: StoredInvoice) => {
+    const receivedDay = new Date().toISOString().split('T')[0];
+    const updatedInvoice: StoredInvoice = {
+      ...invoice,
+      status: 'balance_paid',
+      paymentStatus: 'full',
+      depositPaid: invoice.total,
+      balanceReceivedDate: invoice.balanceReceivedDate || receivedDay,
+    };
+    const updated = savedInvoices.map(inv =>
+      sameInvoiceNumber(inv.invoiceNumber, invoice.invoiceNumber) ? updatedInvoice : inv
+    );
+    const finalizedPaid = finalizeInvoiceList(updated);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(finalizedPaid));
+    setSavedInvoices(finalizedPaid);
+    if (isStudioApiAvailable()) {
+      setSyncStatus('syncing');
+      persistInvoice(updatedInvoice as ApiStoredInvoice)
+        .then(r => { setSyncStatus(r.success ? 'synced' : 'error'); if (r.success) setLastSyncTime(new Date()); })
+        .catch(() => setSyncStatus('error'));
     }
   };
 
   // Update invoice status - uses invoiceNumber as unique identifier (not id)
   const updateInvoiceStatusLocal = (invoiceNumber: string, status: StoredInvoice['status']) => {
     // Find the invoice first to log what we're updating
-    const targetInvoice = savedInvoices.find(inv => inv.invoiceNumber === invoiceNumber);
+    const targetInvoice = savedInvoices.find(inv => sameInvoiceNumber(inv.invoiceNumber, invoiceNumber));
     if (!targetInvoice) {
       console.error('[Status Update] Invoice not found:', invoiceNumber);
       alert('Error: Invoice not found');
@@ -1079,15 +1231,16 @@ function InvoiceGeneratorContent() {
     });
 
     const updated = savedInvoices.map(inv =>
-      inv.invoiceNumber === invoiceNumber ? { ...inv, status } : inv
+      sameInvoiceNumber(inv.invoiceNumber, invoiceNumber) ? { ...inv, status } : inv
     );
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    setSavedInvoices(updated);
+    const finalizedStatus = finalizeInvoiceList(updated);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(finalizedStatus));
+    setSavedInvoices(finalizedStatus);
 
-    // Sync status to Google
-    if (isGoogleSyncEnabled()) {
+    // Sync status to database
+    if (isStudioApiAvailable()) {
       setSyncStatus('syncing');
-      saveInvoiceToGoogle({ ...targetInvoice, status } as GoogleStoredInvoice)
+      persistInvoice({ ...targetInvoice, status } as ApiStoredInvoice)
         .then((result) => {
           if (result.success) {
             setSyncStatus('synced');
@@ -1155,7 +1308,7 @@ function InvoiceGeneratorContent() {
     });
   };
 
-  // Sync all data to Google
+  // Push all local invoices to the database (recovery / bulk sync)
   const [isSyncing, setIsSyncing] = useState(false);
   const [showWhatsAppMenu, setShowWhatsAppMenu] = useState(false);
   const [historyWhatsAppMenu, setHistoryWhatsAppMenu] = useState<string | null>(null); // Track which invoice's WhatsApp menu is open
@@ -1165,13 +1318,13 @@ function InvoiceGeneratorContent() {
     setSyncStatus('syncing');
     try {
       console.log('[Invoice] Starting sync of', savedInvoices.length, 'invoices');
-      const result = await syncAllInvoices(savedInvoices as GoogleStoredInvoice[]);
+      const result = await syncAllInvoices(savedInvoices as ApiStoredInvoice[]);
       console.log('[Invoice] Sync result:', result);
 
       if (result.success) {
         setSyncStatus('synced');
         setLastSyncTime(new Date());
-        alert(`Successfully synced ${savedInvoices.length} items to Google Sheets!`);
+        alert(`Successfully synced ${savedInvoices.length} invoices to the database.`);
       } else {
         setSyncStatus('error');
         alert('Sync error: ' + (result.error || 'Unknown error'));
@@ -1187,16 +1340,16 @@ function InvoiceGeneratorContent() {
 
   // Manual refresh from cloud
   const handleRefreshFromCloud = async () => {
-    if (!isGoogleSyncEnabled()) {
-      alert('Google sync is not configured.');
+    if (!isStudioApiAvailable()) {
+      alert('Database sync is not configured.');
       return;
     }
 
     setSyncStatus('syncing');
     try {
-      const result = await fetchInvoicesFromCloud();
+      const result = await fetchInvoices();
       if (result.success) {
-        const cloudInvoices = result.invoices as StoredInvoice[];
+        const cloudInvoices = finalizeInvoiceList(result.invoices as StoredInvoice[]);
         setSavedInvoices(cloudInvoices);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudInvoices));
         setSyncStatus('synced');
@@ -1215,8 +1368,8 @@ function InvoiceGeneratorContent() {
 
   // Create calendar event for current invoice
   const handleCreateCalendarEvent = async () => {
-    if (!isGoogleSyncEnabled()) {
-      alert('Google sync is not configured.');
+    if (!isStudioApiAvailable()) {
+      alert('Database sync is not configured.');
       return;
     }
 
@@ -1258,14 +1411,17 @@ function InvoiceGeneratorContent() {
         : Math.round(totalAfterDiscount * (siteConfig.terms.depositPercent / 100));
 
     if (confirm(`Mark deposit of RM ${deposit} as received?\n\nThis will:\n• Set payment status to "Deposit Received"\n• Auto-create calendar event (if not already created)\n• Convert quotation to invoice (if applicable)`)) {
+      const depositAmt = depositPaid === 0 ? deposit : depositPaid;
+      const receivedDay = new Date().toISOString().split('T')[0];
+
       // Set deposit amount if not already set
       if (depositPaid === 0) {
-        setDepositPaid(deposit);
+        setDepositPaid(depositAmt);
       }
 
       // Update payment status
       setPaymentStatus('deposit');
-      setDepositReceivedDate(new Date().toISOString().split('T')[0]);
+      setDepositReceivedDate(receivedDay);
 
       // Update status to deposit_received
       setCurrentStatus('deposit_received');
@@ -1276,7 +1432,7 @@ function InvoiceGeneratorContent() {
       }
 
       // Auto-create calendar event if not already created
-      if (!calendarCreated && eventDate && clientName && isGoogleSyncEnabled()) {
+      if (!calendarCreated && eventDate && clientName && isStudioApiAvailable()) {
         try {
           const result = await createCalendarEvent({
             clientName,
@@ -1301,32 +1457,180 @@ function InvoiceGeneratorContent() {
         }
       }
 
-      // Auto-save
-      saveInvoice('deposit_received');
+      // Auto-save (overrides: React 18 batches setState; save must persist deposit + dates in one write)
+      saveInvoice('deposit_received', {
+        depositPaid: depositAmt,
+        paymentStatus: 'deposit',
+        depositReceivedDate: receivedDay,
+      });
     }
   };
 
   // Handle marking balance as paid
   const handleMarkBalancePaid = () => {
-    if (confirm(`Mark balance of RM ${balanceDue} as paid?\n\nThis will:\n• Set payment status to "Full"\n• Mark as "Fully Paid"`)) {
+    const fullTotal = totalAfterDiscount;
+    const receivedDay = new Date().toISOString().split('T')[0];
+    const outstanding = Math.max(0, fullTotal - depositPaid);
+    if (confirm(`Mark balance of RM ${outstanding.toFixed(2)} as paid?\n\nThis will:\n• Record full amount received (RM ${fullTotal.toFixed(2)})\n• Set payment status to "Full"\n• Mark as "Fully Paid"`)) {
       setPaymentStatus('full');
-      setBalanceReceivedDate(new Date().toISOString().split('T')[0]);
+      setBalanceReceivedDate(receivedDay);
+      setDepositPaid(fullTotal);
       setCurrentStatus('balance_paid');
 
       // Auto-save
-      saveInvoice('balance_paid');
+      saveInvoice('balance_paid', {
+        depositPaid: fullTotal,
+        paymentStatus: 'full',
+        balanceReceivedDate: receivedDay,
+      });
     }
   };
 
   // Handle marking event as completed
   const handleMarkCompleted = () => {
-    if (confirm('Mark event as completed?\n\nThis confirms the performance has been done.')) {
-      setEventCompletedDate(new Date().toISOString().split('T')[0]);
-      setCurrentStatus('completed');
+    if (!confirm('Mark event as completed?\n\nThis confirms the performance has been done.')) return;
 
-      // Auto-save
-      saveInvoice('completed');
+    const outstanding = Math.max(0, totalAfterDiscount - depositPaid);
+    let settleOverrides: SaveInvoiceOverrides | undefined;
+    if (outstanding > 0.005 && paymentStatus !== 'full') {
+      if (confirm(`There is RM ${outstanding.toFixed(2)} still recorded as unpaid. Record full settlement now?\n\nOK = mark total received and complete.\nCancel = complete only (use Balance Paid later to clear the balance line).`)) {
+        const receivedDay = new Date().toISOString().split('T')[0];
+        settleOverrides = {
+          depositPaid: totalAfterDiscount,
+          paymentStatus: 'full',
+          balanceReceivedDate: receivedDay,
+        };
+        setDepositPaid(totalAfterDiscount);
+        setPaymentStatus('full');
+        setBalanceReceivedDate(receivedDay);
+      }
     }
+
+    const completedDay = new Date().toISOString().split('T')[0];
+    setEventCompletedDate(completedDay);
+    setCurrentStatus('completed');
+
+    saveInvoice('completed', {
+      ...settleOverrides,
+      eventCompletedDate: completedDay,
+    });
+  };
+
+  // Request feedback (sends Thank You WhatsApp + sets feedbackStatus = 'requested')
+  const handleRequestFeedback = () => {
+    const today = new Date().toISOString().split('T')[0];
+    setFeedbackStatus('requested');
+    saveInvoice(currentStatus, { feedbackStatus: 'requested' });
+    // Open Thank You WhatsApp if phone is available
+    if (clientPhone) {
+      handleSendWhatsApp('thankyou');
+    }
+  };
+
+  // Archive invoice (feedback reviewed, booking fully closed)
+  const handleArchive = () => {
+    if (confirm('Archive this booking?\n\nThis marks it as fully closed. You can still find it under the Completed/Archived filter.')) {
+      setFeedbackStatus('reviewed');
+      setCurrentStatus('archived');
+      saveInvoice('archived', { feedbackStatus: 'reviewed' });
+    }
+  };
+
+  // Build a WhatsApp message string for a stored invoice + template id (used in history panel)
+  const buildHistoryWhatsAppMessage = (inv: StoredInvoice, templateId: MessageTemplateId): string => {
+    const deposit = Math.round(inv.total * (siteConfig.terms.depositPercent / 100));
+    const eventTimeStr = `${inv.eventTimeHour}:${inv.eventTimeMinute} ${inv.eventTimePeriod}`;
+    const balanceDueDate = inv.eventDate
+      ? new Date(new Date(inv.eventDate).setDate(new Date(inv.eventDate).getDate() - siteConfig.terms.balanceDueDays))
+          .toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+      : `${siteConfig.terms.balanceDueDays} days before event`;
+
+    switch (templateId) {
+      case 'quotation':
+        return generateQuotationMessage({
+          clientName: inv.clientName || 'Client',
+          eventDate: inv.eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: inv.eventVenue || 'TBC',
+          packageName: inv.items[0]?.description || 'Performance Package',
+          total: inv.total,
+          deposit,
+          invoiceNumber: inv.invoiceNumber,
+        });
+      case 'confirmation':
+        return generateConfirmationMessage({
+          clientName: inv.clientName || 'Client',
+          eventDate: inv.eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: inv.eventVenue || 'TBC',
+          depositAmount: inv.depositPaid,
+          balanceAmount: Math.max(0, inv.total - inv.depositPaid),
+        });
+      case 'balance':
+        return generateBalanceReminderMessage({
+          clientName: inv.clientName || 'Client',
+          eventDate: inv.eventDate || 'TBC',
+          eventTime: eventTimeStr,
+          venue: inv.eventVenue || 'TBC',
+          balanceAmount: Math.max(0, inv.total - inv.depositPaid),
+          dueDate: balanceDueDate,
+        });
+      case 'songs': {
+        const fromSelections = (inv.songSelections ?? [])
+          .map((s) => s.title || s.songId)
+          .filter(Boolean);
+        const fromLineItems = inv.items.map((item) => item.description).filter(Boolean);
+        return generateSongConfirmationMessage({
+          clientName: inv.clientName || 'Client',
+          eventDate: inv.eventDate || 'TBC',
+          currentSongs: fromSelections.length > 0 ? fromSelections : fromLineItems,
+        });
+      }
+      case 'thankyou':
+        return generateThankYouMessage({
+          clientName: inv.clientName || 'Client',
+          eventType: inv.eventType || 'event',
+          eventDate: inv.eventDate || 'your special day',
+        });
+      default:
+        return '';
+    }
+  };
+
+  // Suggest the most relevant WhatsApp template for a given invoice state
+  const getSuggestedTemplate = (inv: {
+    status: string;
+    paymentStatus?: string;
+    eventDate?: string;
+    documentType?: string;
+  }): MessageTemplateId => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const songDays = siteConfig.reminders.songConfirmation;
+    const balanceDays = siteConfig.reminders.balanceReminder;
+
+    if (inv.status === 'completed' || inv.status === 'archived') return 'thankyou';
+    if (inv.status === 'balance_paid' || inv.status === 'paid' || inv.paymentStatus === 'full') return 'thankyou';
+
+    // Song confirmation window
+    if (inv.eventDate) {
+      const balanceCutoff = new Date();
+      balanceCutoff.setDate(balanceCutoff.getDate() + balanceDays);
+      const songCutoff = new Date();
+      songCutoff.setDate(songCutoff.getDate() + songDays);
+      if (inv.eventDate > balanceCutoff.toISOString().split('T')[0] && inv.eventDate <= songCutoff.toISOString().split('T')[0]) return 'songs';
+      // Balance due soon
+      if (inv.eventDate >= todayStr && inv.eventDate <= balanceCutoff.toISOString().split('T')[0]) return 'balance';
+    }
+
+    if (inv.status === 'deposit_received' || inv.status === 'invoice_sent' || inv.paymentStatus === 'deposit') return 'confirmation';
+    return 'quotation';
+  };
+
+  // Mark receipt as sent (records the date without printing)
+  const handleMarkReceiptSent = () => {
+    const today = new Date().toISOString().split('T')[0];
+    setReceiptSentDate(today);
+    saveInvoice(currentStatus, { receiptSentDate: today });
   };
 
   // Handle marking as sent (quotation or invoice)
@@ -1383,13 +1687,16 @@ function InvoiceGeneratorContent() {
           dueDate: formattedBalanceDueDate,
         });
         break;
-      case 'songs':
+      case 'songs': {
+        const fromSelections = songSelections.map((s) => s.title || s.songId).filter(Boolean);
+        const fromLineItems = items.map((item) => item.description).filter(Boolean);
         message = generateSongConfirmationMessage({
           clientName: clientName || 'Client',
           eventDate: eventDate || 'TBC',
-          currentSongs: items.map(item => item.description).filter(Boolean),
+          currentSongs: fromSelections.length > 0 ? fromSelections : fromLineItems,
         });
         break;
+      }
       case 'thankyou':
         message = generateThankYouMessage({
           clientName: clientName || 'Client',
@@ -1518,19 +1825,7 @@ function InvoiceGeneratorContent() {
                 <History className="w-4 h-4" />
                 History ({activeInvoices.length})
               </button>
-              {GOOGLE_SHEET_URL && (
-                <a
-                  href={GOOGLE_SHEET_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
-                  title="View inquiries & invoices in Google Sheets"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  Sheets
-                </a>
-              )}
-              {eventDate && clientName && isGoogleSyncEnabled() && (
+              {eventDate && clientName && isStudioApiAvailable() && (
                 <button
                   onClick={handleCreateCalendarEvent}
                   className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
@@ -1541,27 +1836,42 @@ function InvoiceGeneratorContent() {
                 </button>
               )}
               {clientPhone && (
-                <div className="relative">
+                <div className="relative flex items-center gap-1">
+                  {/* One-click send for the suggested template */}
                   <button
-                    onClick={() => setShowWhatsAppMenu(!showWhatsAppMenu)}
-                    className="flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-green-500 transition-colors text-sm"
-                    title="Send WhatsApp message"
+                    onClick={() => handleSendWhatsApp(getSuggestedTemplate({ status: currentStatus, paymentStatus, eventDate, documentType }))}
+                    className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-2 rounded-l-lg font-medium hover:bg-green-500 transition-colors text-sm"
+                    title={`Send suggested: ${getSuggestedTemplate({ status: currentStatus, paymentStatus, eventDate, documentType })}`}
                   >
                     <MessageCircle className="w-4 h-4" />
-                    WhatsApp
+                    {messageTemplates.find(t => t.id === getSuggestedTemplate({ status: currentStatus, paymentStatus, eventDate, documentType }))?.name || 'WhatsApp'}
+                  </button>
+                  {/* Chevron to open full dropdown */}
+                  <button
+                    onClick={() => setShowWhatsAppMenu(!showWhatsAppMenu)}
+                    className="flex items-center bg-green-700 text-white px-2 py-2 rounded-r-lg font-medium hover:bg-green-600 transition-colors text-sm border-l border-green-500"
+                    title="More templates"
+                  >
+                    <ChevronRight className={`w-4 h-4 transition-transform ${showWhatsAppMenu ? 'rotate-90' : ''}`} />
                   </button>
                   {showWhatsAppMenu && (
-                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50">
-                      {messageTemplates.map((template) => (
-                        <button
-                          key={template.id}
-                          onClick={() => handleSendWhatsApp(template.id)}
-                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors"
-                        >
-                          <div className="font-medium text-slate-800">{template.name}</div>
-                          <div className="text-xs text-slate-500">{template.description}</div>
-                        </button>
-                      ))}
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 top-full">
+                      {messageTemplates.map((template) => {
+                        const isSuggested = template.id === getSuggestedTemplate({ status: currentStatus, paymentStatus, eventDate, documentType });
+                        return (
+                          <button
+                            key={template.id}
+                            onClick={() => { handleSendWhatsApp(template.id); setShowWhatsAppMenu(false); }}
+                            className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${isSuggested ? 'bg-green-50 border-l-2 border-green-500' : ''}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-800">{template.name}</span>
+                              {isSuggested && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">Suggested</span>}
+                            </div>
+                            <div className="text-xs text-slate-500">{template.description}</div>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1601,7 +1911,7 @@ function InvoiceGeneratorContent() {
                 )}
                 {justSaved ? 'Saved!' : hasUnsavedChanges ? 'Save*' : 'Save'}
                 {/* Sync status dot */}
-                {isGoogleSyncEnabled() && !justSaved && (
+                {isStudioApiAvailable() && !justSaved && (
                   <span className={`w-2 h-2 rounded-full ml-1 ${
                     syncStatus === 'synced' ? 'bg-green-300' :
                     syncStatus === 'syncing' ? 'bg-yellow-300 animate-pulse' :
@@ -1662,6 +1972,28 @@ function InvoiceGeneratorContent() {
                   Completed
                 </button>
               )}
+              {/* Request Feedback (for completed events, feedback not yet requested) */}
+              {currentStatus === 'completed' && feedbackStatus === 'pending' && (
+                <button
+                  onClick={handleRequestFeedback}
+                  className="flex items-center gap-2 bg-pink-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-pink-400 transition-colors text-sm"
+                  title="Send thank you message and request feedback"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  Req. Feedback
+                </button>
+              )}
+              {/* Archive (for completed events with feedback received/reviewed) */}
+              {(currentStatus === 'completed' || currentStatus === 'archived') && feedbackStatus !== 'pending' && (
+                <button
+                  onClick={handleArchive}
+                  className="flex items-center gap-2 bg-slate-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-400 transition-colors text-sm"
+                  title="Close and archive this booking"
+                >
+                  <FileText className="w-4 h-4" />
+                  Archive
+                </button>
+              )}
               {/* Convert to Invoice (legacy button - now deposit triggers conversion) */}
               {documentType === 'quotation' && items.length > 0 && !isSentStatus(currentStatus) && currentStatus !== 'quotation_draft' && (
                 <button
@@ -1672,16 +2004,42 @@ function InvoiceGeneratorContent() {
                   Convert
                 </button>
               )}
-              {/* Receipt button */}
+              {/* Receipt buttons */}
               {depositPaid > 0 && (
-                <button
-                  onClick={handlePrintReceipt}
-                  className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
-                  title="Print payment receipt"
-                >
-                  <Receipt className="w-4 h-4" />
-                  Receipt
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handlePrintReceipt}
+                    className="flex items-center gap-2 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-600 transition-colors text-sm"
+                    title="Print payment receipt"
+                  >
+                    <Receipt className="w-4 h-4" />
+                    Receipt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadReceiptPDF()}
+                    className="flex items-center gap-2 bg-slate-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-slate-500 transition-colors text-sm"
+                    title="Download receipt as PDF"
+                  >
+                    <Download className="w-4 h-4" />
+                    PDF
+                  </button>
+                  {receiptSentDate ? (
+                    <span className="flex items-center gap-1 text-xs text-emerald-400 ml-1 whitespace-nowrap" title={`Receipt sent ${receiptSentDate}`}>
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      Sent {receiptSentDate.slice(5)}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleMarkReceiptSent}
+                      className="flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 px-2 py-2 transition-colors whitespace-nowrap"
+                      title="Mark receipt as sent to client"
+                    >
+                      Mark Sent
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -1772,6 +2130,90 @@ function InvoiceGeneratorContent() {
                 )}
               </div>
             )}
+            {/* Row 3: Workflow + receipt (matches desktop; mobile previously had no deposit/balance controls) */}
+            <div className="flex flex-wrap items-center gap-2">
+              {(currentStatus === 'quotation_draft' || currentStatus === 'draft') && items.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMarkSent}
+                  className="flex items-center gap-1 bg-blue-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  title="Mark quotation as sent to client"
+                >
+                  <Send className="w-4 h-4" />
+                  Mark Sent
+                </button>
+              )}
+              {(isSentStatus(currentStatus) || (documentType === 'invoice' && paymentStatus === 'none')) && items.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMarkDepositReceived}
+                  className="flex items-center gap-1 bg-teal-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  title="Mark deposit as received"
+                >
+                  <DollarSign className="w-4 h-4" />
+                  Deposit Received
+                </button>
+              )}
+              {paymentStatus === 'deposit' && balanceDue > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMarkBalancePaid}
+                  className="flex items-center gap-1 bg-emerald-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  title="Mark balance as fully paid"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Balance Paid
+                </button>
+              )}
+              {isFullyPaidStatus(currentStatus) && !eventCompletedDate && (
+                <button
+                  type="button"
+                  onClick={handleMarkCompleted}
+                  className="flex items-center gap-1 bg-purple-500 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                  title="Mark event as completed"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Completed
+                </button>
+              )}
+              {depositPaid > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handlePrintReceipt}
+                    className="flex items-center gap-1 bg-slate-700 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                    title="Print payment receipt"
+                  >
+                    <Receipt className="w-4 h-4" />
+                    Receipt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadReceiptPDF()}
+                    className="flex items-center gap-1 bg-slate-600 text-white px-3 py-2 rounded-lg font-medium text-xs"
+                    title="Download receipt as PDF"
+                  >
+                    <Download className="w-4 h-4" />
+                    Rcpt PDF
+                  </button>
+                  {!receiptSentDate ? (
+                    <button
+                      type="button"
+                      onClick={handleMarkReceiptSent}
+                      className="flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 px-2 py-2 transition-colors"
+                      title="Mark receipt as sent to client"
+                    >
+                      Mark Sent
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+                      <CheckCircle className="w-3 h-3" />
+                      Sent
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
           </div>
           {/* WhatsApp menu modal */}
           {showWhatsAppMenu && (
@@ -2038,6 +2480,90 @@ function InvoiceGeneratorContent() {
                     />
                   </div>
                 )}
+                {/* Internal notes — not printed on PDF */}
+                <div className="print:hidden">
+                  <label className="block text-sm text-slate-600 mb-1">
+                    Internal Notes
+                    <span className="ml-1 text-xs text-slate-400">(not on PDF)</span>
+                  </label>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Song requests, venue notes, special requirements..."
+                    rows={2}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-sm resize-none"
+                  />
+                </div>
+
+                {/* Repertoire — from database (`GET /api/songs`), saved on invoice */}
+                <div className="print:hidden border border-violet-100 rounded-lg p-3 bg-violet-50/40 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Music className="w-4 h-4 text-violet-600 shrink-0" />
+                    <span className="text-sm font-medium text-slate-700">Repertoire picks</span>
+                    <span className="text-xs text-slate-400">(linked to this invoice)</span>
+                  </div>
+                  {songSelections.length > 0 && (
+                    <ul className="flex flex-wrap gap-1.5">
+                      {songSelections.map((s) => (
+                        <li
+                          key={s.songId}
+                          className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-white border border-violet-200 text-xs text-slate-700"
+                        >
+                          <span className="truncate max-w-[200px]" title={s.artist ? `${s.title} — ${s.artist}` : s.title}>
+                            {s.title || s.songId}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeSongPick(s.songId)}
+                            className="p-0.5 rounded-full hover:bg-violet-100 text-slate-500 hover:text-violet-700"
+                            aria-label={`Remove ${s.title || s.songId}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="relative">
+                    <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={songPickSearch}
+                      onChange={(e) => setSongPickSearch(e.target.value)}
+                      placeholder={songLibrary.length ? 'Search songs to add…' : 'Loading song library…'}
+                      disabled={songLibrary.length === 0}
+                      className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500 disabled:bg-slate-100 disabled:text-slate-400"
+                    />
+                  </div>
+                  {songLibrary.length > 0 && filteredSongPickList.length > 0 && (
+                    <ul className="max-h-40 overflow-y-auto rounded-lg border border-violet-100 bg-white divide-y divide-slate-100 text-sm">
+                      {filteredSongPickList.map((song) => (
+                        <li key={song.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              addSongPick(song);
+                              setSongPickSearch('');
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-violet-50 flex justify-between gap-2"
+                          >
+                            <span className="font-medium text-slate-800 truncate">{song.title}</span>
+                            <span className="text-slate-500 text-xs shrink-0">{song.category}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {songLibrary.length > 0 &&
+                    songPickSearch.trim() &&
+                    filteredSongPickList.length === 0 && (
+                      <p className="text-xs text-slate-500">
+                        {songLibrary.some((lib) => !songSelections.some((sel) => sel.songId === lib.id))
+                          ? 'No matches — try another search.'
+                          : 'All songs from the library are already selected.'}
+                      </p>
+                    )}
+                </div>
               </div>
             </div>
 
@@ -2351,7 +2877,7 @@ function InvoiceGeneratorContent() {
                         <span className="text-slate-600">Deposit Paid</span>
                         <span>-RM {depositPaid.toFixed(2)}</span>
                       </div>
-                      {currentStatus === 'paid' ? (
+                      {showBalanceSettled ? (
                         <div className="flex justify-between py-2 border-b-2 border-emerald-500 font-semibold text-emerald-600">
                           <span>Balance Due</span>
                           <span>RM 0.00 PAID</span>
@@ -2360,7 +2886,7 @@ function InvoiceGeneratorContent() {
                         <div className="flex justify-between py-2 border-b-2 border-amber-500 font-semibold">
                           <span>Balance Due</span>
                           <span className={balanceDue < 0 ? 'text-green-600' : ''}>
-                            RM {balanceDue.toFixed(2)}
+                            RM {displayBalanceDue.toFixed(2)}
                           </span>
                         </div>
                       )}
@@ -2481,13 +3007,13 @@ function InvoiceGeneratorContent() {
                   <span>Amount Paid</span>
                   <span>RM {depositPaid.toFixed(2)}</span>
                 </div>
-                {balanceDue > 0 && (
+                {displayBalanceDue > 0 && (
                   <div className="flex justify-between pt-2 border-t text-amber-600">
                     <span>Balance Due</span>
-                    <span>RM {balanceDue.toFixed(2)}</span>
+                    <span>RM {displayBalanceDue.toFixed(2)}</span>
                   </div>
                 )}
-                {balanceDue <= 0 && (
+                {displayBalanceDue <= 0 && (
                   <div className="flex justify-between pt-2 border-t text-emerald-600 font-bold">
                     <span>Status</span>
                     <span>✓ PAID IN FULL</span>
@@ -2679,7 +3205,7 @@ function InvoiceGeneratorContent() {
               ) : (
                 <div className="divide-y">
                   {paginatedInvoices.map((invoice) => (
-                    <div key={invoice.id} className="p-4 hover:bg-slate-50 transition-colors">
+                    <div key={normalizeInvoiceNumber(invoice.invoiceNumber)} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -2697,7 +3223,7 @@ function InvoiceGeneratorContent() {
                               onChange={(e) => updateInvoiceStatusLocal(invoice.invoiceNumber, e.target.value as StoredInvoice['status'])}
                               className={`text-xs px-2 py-0.5 rounded-full font-medium border-0 cursor-pointer ${
                                 isCompletedStatus(invoice.status) ? 'bg-purple-100 text-purple-700' :
-                                isFullyPaidStatus(invoice.status) ? 'bg-emerald-100 text-emerald-700' :
+                                invoiceRecordedFullyPaid(invoice) ? 'bg-emerald-100 text-emerald-700' :
                                 isPaidStatus(invoice.status) ? 'bg-teal-100 text-teal-700' :
                                 isSentStatus(invoice.status) ? 'bg-blue-100 text-blue-700' :
                                 invoice.status === 'cancelled' ? 'bg-red-100 text-red-700' :
@@ -2742,9 +3268,23 @@ function InvoiceGeneratorContent() {
                               <span className="text-emerald-600">RM {invoice.depositPaid} paid</span>
                             )}
                           </div>
-                          {/* Missing info badges - action items */}
-                          {(!invoice.clientPhone || !invoice.eventVenue || (invoice.documentType === 'invoice' && !invoice.depositPaid)) && (
-                            <div className="flex items-center gap-1.5 mt-1.5">
+                          {invoice.notes && (
+                            <p className="text-[10px] text-slate-400 italic mt-0.5 truncate max-w-xs" title={invoice.notes}>
+                              {invoice.notes.length > 80 ? invoice.notes.slice(0, 80) + '…' : invoice.notes}
+                            </p>
+                          )}
+                          {invoice.songSelections && invoice.songSelections.length > 0 && (
+                            <p
+                              className="text-[10px] text-violet-600 mt-0.5 flex items-center gap-1 truncate max-w-xs"
+                              title={invoice.songSelections.map((s) => s.title || s.songId).join(', ')}
+                            >
+                              <Music className="w-3 h-3 shrink-0" />
+                              {invoice.songSelections.length} repertoire song
+                              {invoice.songSelections.length === 1 ? '' : 's'}
+                            </p>
+                          )}
+                          {/* Info badges */}
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                               {!invoice.clientPhone && (
                                 <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full" title="Missing phone number">
                                   <Phone className="w-3 h-3" />
@@ -2763,16 +3303,39 @@ function InvoiceGeneratorContent() {
                                   <span className="hidden sm:inline">No deposit</span>
                                 </span>
                               )}
+                              {(invoice.status === 'completed' || invoice.status === 'archived') && (
+                                <span className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full ${
+                                  invoice.feedbackStatus === 'reviewed' ? 'bg-emerald-100 text-emerald-600' :
+                                  invoice.feedbackStatus === 'received' ? 'bg-blue-100 text-blue-600' :
+                                  invoice.feedbackStatus === 'requested' ? 'bg-purple-100 text-purple-600' :
+                                  'bg-rose-100 text-rose-600'
+                                }`} title="Feedback status">
+                                  <MessageCircle className="w-3 h-3" />
+                                  <span className="hidden sm:inline">
+                                    {invoice.feedbackStatus === 'reviewed' ? 'Reviewed' :
+                                     invoice.feedbackStatus === 'received' ? 'Received' :
+                                     invoice.feedbackStatus === 'requested' ? 'Requested' :
+                                     'Feedback pending'}
+                                  </span>
+                                </span>
+                              )}
+                              {invoice.receiptSentDate && (
+                                <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-teal-100 text-teal-600 rounded-full" title={`Receipt sent ${invoice.receiptSentDate}`}>
+                                  <Receipt className="w-3 h-3" />
+                                  <span className="hidden sm:inline">Rcpt sent</span>
+                                </span>
+                              )}
                             </div>
-                          )}
                         </div>
                         <div className="text-right ml-3">
                           <div className="font-bold text-amber-600">RM {invoice.total.toFixed(0)}</div>
-                          {invoice.status !== 'paid' && invoice.total - invoice.depositPaid > 0 && (
+                          {invoiceRecordedFullyPaid(invoice) ? (
+                            <div className="text-xs text-emerald-600 font-medium">Paid ✓</div>
+                          ) : invoice.total - invoice.depositPaid > 0 ? (
                             <div className="text-xs text-slate-500">
                               Bal: RM {(invoice.total - invoice.depositPaid).toFixed(0)}
                             </div>
-                          )}
+                          ) : null}
                         </div>
                       </div>
 
@@ -2800,95 +3363,59 @@ function InvoiceGeneratorContent() {
                               <Download className="w-3.5 h-3.5" />
                               PDF
                             </button>
-                            {/* WhatsApp dropdown with templates - only show if phone exists */}
+                            {/* WhatsApp: one-click suggested + dropdown for all templates */}
                             {invoice.clientPhone && (
-                              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                              <div className="relative flex items-center gap-0" onClick={(e) => e.stopPropagation()}>
+                                {/* One-click suggested */}
                                 <button
-                                  onClick={() => setHistoryWhatsAppMenu(historyWhatsAppMenu === invoice.invoiceNumber ? null : invoice.invoiceNumber)}
-                                  className="flex items-center gap-1.5 text-green-600 hover:bg-green-50 py-1.5 px-3 rounded-lg border border-green-200 text-xs font-medium transition-colors"
+                                  onClick={() => {
+                                    const tid = getSuggestedTemplate(invoice);
+                                    openWhatsAppWithMessage(invoice.clientPhone, buildHistoryWhatsAppMessage(invoice, tid));
+                                  }}
+                                  className="flex items-center gap-1.5 text-green-600 hover:bg-green-50 py-1.5 px-2 rounded-l-lg border border-green-200 text-xs font-medium transition-colors"
+                                  title={`Send: ${getSuggestedTemplate(invoice)}`}
                                 >
                                   <MessageCircle className="w-3.5 h-3.5" />
-                                  WhatsApp
+                                  {messageTemplates.find(t => t.id === getSuggestedTemplate(invoice))?.name || 'WA'}
+                                </button>
+                                {/* Dropdown chevron */}
+                                <button
+                                  onClick={() => setHistoryWhatsAppMenu(historyWhatsAppMenu === invoice.invoiceNumber ? null : invoice.invoiceNumber)}
+                                  className="flex items-center text-green-600 hover:bg-green-50 py-1.5 px-1.5 rounded-r-lg border border-l-0 border-green-200 text-xs font-medium transition-colors"
+                                  title="All templates"
+                                >
                                   <ChevronRight className={`w-3 h-3 transition-transform ${historyWhatsAppMenu === invoice.invoiceNumber ? 'rotate-90' : ''}`} />
                                 </button>
                                 {historyWhatsAppMenu === invoice.invoiceNumber && (
                                   <div className="absolute left-0 top-full mt-1 w-52 bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50">
-                                    {messageTemplates.map((template) => (
-                                      <button
-                                        key={template.id}
-                                        onClick={() => {
-                                          const deposit = Math.round(invoice.total * (siteConfig.terms.depositPercent / 100));
-                                          const eventTimeStr = `${invoice.eventTimeHour}:${invoice.eventTimeMinute} ${invoice.eventTimePeriod}`;
-                                          const balanceDueDate = invoice.eventDate
-                                            ? new Date(new Date(invoice.eventDate).setDate(new Date(invoice.eventDate).getDate() - siteConfig.terms.balanceDueDays)).toLocaleDateString('en-MY', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
-                                            : `${siteConfig.terms.balanceDueDays} days before event`;
-
-                                          let message = '';
-                                          switch (template.id) {
-                                            case 'quotation':
-                                              message = generateQuotationMessage({
-                                                clientName: invoice.clientName || 'Client',
-                                                eventDate: invoice.eventDate || 'TBC',
-                                                eventTime: eventTimeStr,
-                                                venue: invoice.eventVenue || 'TBC',
-                                                packageName: invoice.items[0]?.description || 'Performance Package',
-                                                total: invoice.total,
-                                                deposit,
-                                                invoiceNumber: invoice.invoiceNumber,
-                                              });
-                                              break;
-                                            case 'confirmation':
-                                              message = generateConfirmationMessage({
-                                                clientName: invoice.clientName || 'Client',
-                                                eventDate: invoice.eventDate || 'TBC',
-                                                eventTime: eventTimeStr,
-                                                venue: invoice.eventVenue || 'TBC',
-                                                depositAmount: invoice.depositPaid,
-                                                balanceAmount: invoice.total - invoice.depositPaid,
-                                              });
-                                              break;
-                                            case 'balance':
-                                              message = generateBalanceReminderMessage({
-                                                clientName: invoice.clientName || 'Client',
-                                                eventDate: invoice.eventDate || 'TBC',
-                                                eventTime: eventTimeStr,
-                                                venue: invoice.eventVenue || 'TBC',
-                                                balanceAmount: invoice.total - invoice.depositPaid,
-                                                dueDate: balanceDueDate,
-                                              });
-                                              break;
-                                            case 'songs':
-                                              message = generateSongConfirmationMessage({
-                                                clientName: invoice.clientName || 'Client',
-                                                eventDate: invoice.eventDate || 'TBC',
-                                                currentSongs: invoice.items.map(item => item.description).filter(Boolean),
-                                              });
-                                              break;
-                                            case 'thankyou':
-                                              message = generateThankYouMessage({
-                                                clientName: invoice.clientName || 'Client',
-                                                eventType: invoice.eventType || 'event',
-                                                eventDate: invoice.eventDate || 'your special day',
-                                              });
-                                              break;
-                                          }
-                                          openWhatsAppWithMessage(invoice.clientPhone, message);
-                                          setHistoryWhatsAppMenu(null);
-                                        }}
-                                        className="w-full text-left px-3 py-2.5 hover:bg-green-50 transition-colors"
-                                      >
-                                        <div className="text-xs font-medium text-slate-800">{template.name}</div>
-                                        <div className="text-[10px] text-slate-500">{template.description}</div>
-                                      </button>
-                                    ))}
+                                    {messageTemplates.map((template) => {
+                                      const isSugg = template.id === getSuggestedTemplate(invoice);
+                                      return (
+                                        <button
+                                          key={template.id}
+                                          onClick={() => {
+                                            openWhatsAppWithMessage(invoice.clientPhone, buildHistoryWhatsAppMessage(invoice, template.id));
+                                            setHistoryWhatsAppMenu(null);
+                                          }}
+                                          className={`w-full text-left px-3 py-2.5 hover:bg-green-50 transition-colors ${isSugg ? 'bg-green-50 border-l-2 border-green-400' : ''}`}
+                                        >
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-xs font-medium text-slate-800">{template.name}</span>
+                                            {isSugg && <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded-full">Suggested</span>}
+                                          </div>
+                                          <div className="text-[10px] text-slate-500">{template.description}</div>
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
                               </div>
                             )}
-                            {invoice.status !== 'paid' && (
+                            {!invoiceRecordedFullyPaid(invoice) && (
                               <button
-                                onClick={() => updateInvoiceStatusLocal(invoice.invoiceNumber, 'paid')}
+                                onClick={() => quickMarkFullyPaid(invoice)}
                                 className="flex items-center gap-1.5 text-emerald-600 hover:bg-emerald-50 py-1.5 px-3 rounded-lg border border-emerald-200 text-xs font-medium transition-colors"
+                                title="Mark as fully paid and record balance received date"
                               >
                                 <CheckCircle className="w-3.5 h-3.5" />
                                 Mark Paid
@@ -2955,10 +3482,10 @@ function InvoiceGeneratorContent() {
 
             {/* Panel Footer */}
             <div className="bg-slate-100 px-4 sm:px-6 py-3 border-t text-center text-xs text-slate-500">
-              {isGoogleSyncEnabled() ? (
+              {isStudioApiAvailable() ? (
                 <span className="flex items-center justify-center gap-1">
                   <Cloud className="w-3 h-3" />
-                  Synced with Google Sheets
+                  Synced with database
                   {lastSyncTime && (
                     <span className="text-slate-400 ml-1">
                       • Last sync: {lastSyncTime.toLocaleTimeString()}

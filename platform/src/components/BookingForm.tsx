@@ -14,7 +14,7 @@ const TikTokIcon = ({ className }: { className?: string }) => (
 import { siteConfig, getWhatsAppUrl, getSocialUrl } from '@/config/site.config';
 import AvailabilityCalendar from './AvailabilityCalendar';
 import { useCloudConfig } from '@/lib/cloud-config';
-import { saveBookingInquiry, isGoogleSyncEnabled } from '@/lib/google-sync';
+import { saveBookingInquiry, isStudioApiAvailable } from '@/lib/studio-api';
 
 interface BookingFormData {
   name: string;
@@ -123,7 +123,7 @@ ${data.message || 'None'}
     setIsSubmitted(true);
 
     // Save inquiry to Google Sheets + create draft quotation in background (if configured)
-    if (isGoogleSyncEnabled()) {
+    if (isStudioApiAvailable()) {
       // Don't await - let it happen in background
       saveBookingInquiry({
         name: data.name,
