@@ -47,6 +47,8 @@ const SHEETS = {
  * Handle GET requests (for availability checking and write operations for CORS compatibility)
  */
 function doGet(e) {
+  e = e || {};
+  e.parameter = e.parameter || {};
   const action = e.parameter.action;
 
   try {
@@ -86,8 +88,20 @@ function doGet(e) {
         result = saveBookingInquiry(inquiryData);
         break;
       case 'saveConfig':
-        const configData = JSON.parse(e.parameter.data);
+        var dataStr = e.parameter.data;
+        if (!dataStr && e.parameter.dataPart0 !== undefined) {
+          dataStr = '';
+          var i = 0;
+          while (e.parameter['dataPart' + i] !== undefined) {
+            dataStr += e.parameter['dataPart' + i];
+            i++;
+          }
+        }
+        const configData = JSON.parse(dataStr || '{}');
         result = saveConfig(configData);
+        break;
+      case 'saveConfigPart':
+        result = saveConfigPart(e.parameter.runId, e.parameter.partIndex, e.parameter.totalParts, e.parameter.data);
         break;
       case 'saveSubscriber':
         result = saveSubscriber(e.parameter.phone);
@@ -99,7 +113,7 @@ function doGet(e) {
         result = getConfigHistory();
         break;
       default:
-        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig', 'saveSubscriber', 'archiveConfig', 'getConfigHistory'] };
+        result = { error: 'Unknown action', availableActions: ['getAvailability', 'getEvents', 'getInvoices', 'getLatestInvoiceNumber', 'getConfig', 'saveInvoice', 'saveInvoices', 'createCalendarEvent', 'saveBookingInquiry', 'saveConfig', 'saveConfigPart', 'saveSubscriber', 'archiveConfig', 'getConfigHistory'] };
     }
 
     return ContentService
@@ -117,6 +131,9 @@ function doGet(e) {
  */
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'No POST data' })).setMimeType(ContentService.MimeType.JSON);
+    }
     const data = JSON.parse(e.postData.contents);
     const action = data.action;
 
@@ -968,21 +985,59 @@ function saveConfig(newConfig) {
     keyToRow[data[i][0]] = i + 1; // 1-indexed
   }
 
-  // Update each config value
+  // Batch updates: collect existing row updates, then one setValues per row (faster than two setValue calls per row)
+  const updates = [];
+  const newRows = [];
   for (const [key, value] of Object.entries(newConfig)) {
     const type = typeof value === 'object' ? 'json' : typeof value;
     const stringValue = type === 'json' ? JSON.stringify(value) : String(value);
 
     if (keyToRow[key]) {
-      // Update existing
-      sheet.getRange(keyToRow[key], 2).setValue(stringValue);
-      sheet.getRange(keyToRow[key], 3).setValue(type);
+      updates.push({ row: keyToRow[key], value: stringValue, type: type });
     } else {
-      // Append new
-      sheet.appendRow([key, stringValue, type, '']);
+      newRows.push([key, stringValue, type, '']);
     }
   }
+  for (var u = 0; u < updates.length; u++) {
+    var r = updates[u];
+    sheet.getRange(r.row, 2, r.row, 3).setValues([[r.value, r.type]]);
+  }
+  for (var n = 0; n < newRows.length; n++) {
+    sheet.appendRow(newRows[n]);
+  }
 
+  return { success: true };
+}
+
+/**
+ * Save config in parts (one GET per part to stay under URL length). Merge and save when last part received.
+ */
+function saveConfigPart(runId, partIndex, totalParts, data) {
+  if (runId === undefined || partIndex === undefined || totalParts === undefined) {
+    return { success: false, error: 'Missing runId, partIndex, or totalParts' };
+  }
+  var key = 'configPart_' + runId + '_' + partIndex;
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(key, data || '');
+  var received = 0;
+  for (var i = 0; i < parseInt(totalParts, 10); i++) {
+    if (props.getProperty('configPart_' + runId + '_' + i) !== null) received++;
+  }
+  if (received !== parseInt(totalParts, 10)) {
+    return { success: true };
+  }
+  var dataStr = '';
+  for (var j = 0; j < parseInt(totalParts, 10); j++) {
+    dataStr += props.getProperty('configPart_' + runId + '_' + j) || '';
+    props.deleteProperty('configPart_' + runId + '_' + j);
+  }
+  var configData;
+  try {
+    configData = JSON.parse(dataStr);
+  } catch (e) {
+    return { success: false, error: 'Invalid JSON when merging parts' };
+  }
+  saveConfig(configData);
   return { success: true };
 }
 

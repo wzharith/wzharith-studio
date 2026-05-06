@@ -1,47 +1,94 @@
 /**
- * Unified Authentication for WZHarith Studio
+ * Client-side authentication helpers for WZHarith Studio.
  *
- * Shared auth state across invoice, admin, and dashboard pages.
- * Login once = access all protected pages.
+ * Auth is server-side: the password lives only in INVOICE_PASSWORD on the
+ * server. Login posts to /api/auth/login which sets a signed httpOnly cookie
+ * (studio_session). Subsequent /api/* calls automatically include the cookie.
+ *
+ * sessionStorage holds an optimistic "logged in" flag so the UI doesn't flash
+ * a login form on every navigation; the server cookie is the source of truth.
  */
 
-// Session storage key for auth state
-const AUTH_KEY = 'studio_auth';
+const AUTH_FLAG_KEY = 'studio_auth';
 
-// Password from environment variable
-const STUDIO_PASSWORD = process.env.NEXT_PUBLIC_INVOICE_PASSWORD || 'taktahu';
+function setLocalFlag(value: boolean): void {
+  if (typeof window === 'undefined') return;
+  if (value) {
+    sessionStorage.setItem(AUTH_FLAG_KEY, 'true');
+  } else {
+    sessionStorage.removeItem(AUTH_FLAG_KEY);
+  }
+}
 
 /**
- * Check if user is authenticated
+ * Optimistic, synchronous check based on sessionStorage. Use as the initial
+ * gate; pair with `verifyAuthWithServer()` on mount to confirm.
  */
 export const isAuthenticated = (): boolean => {
   if (typeof window === 'undefined') return false;
-  return sessionStorage.getItem(AUTH_KEY) === 'true';
+  return sessionStorage.getItem(AUTH_FLAG_KEY) === 'true';
 };
 
 /**
- * Validate password and set auth state
+ * Confirm the session cookie is still valid on the server. Updates the
+ * sessionStorage flag and returns the authoritative value.
  */
-export const login = (password: string): boolean => {
-  if (password === STUDIO_PASSWORD) {
-    sessionStorage.setItem(AUTH_KEY, 'true');
-    return true;
+export const verifyAuthWithServer = async (): Promise<boolean> => {
+  try {
+    const res = await fetch('/api/auth/status', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      setLocalFlag(false);
+      return false;
+    }
+    const data = (await res.json()) as { authenticated?: boolean };
+    const ok = !!data.authenticated;
+    setLocalFlag(ok);
+    return ok;
+  } catch {
+    return isAuthenticated();
   }
-  return false;
 };
 
 /**
- * Clear auth state (logout)
+ * Validate password with the server and, on success, set the session cookie
+ * and the local optimistic flag. Async (was sync before the migration).
  */
-export const logout = (): void => {
-  sessionStorage.removeItem(AUTH_KEY);
+export const login = async (password: string): Promise<boolean> => {
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      setLocalFlag(false);
+      return false;
+    }
+    const data = (await res.json()) as { success?: boolean };
+    const ok = !!data.success;
+    setLocalFlag(ok);
+    return ok;
+  } catch {
+    return false;
+  }
 };
 
 /**
- * Get the expected password (for debugging only - remove in production)
+ * Clear server cookie and local flag.
  */
-export const getPasswordHint = (): string => {
-  // Return first letter + length for hint
-  if (!STUDIO_PASSWORD) return 'not set';
-  return `${STUDIO_PASSWORD[0]}${'*'.repeat(STUDIO_PASSWORD.length - 1)}`;
+export const logout = async (): Promise<void> => {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch {
+    // ignore network errors; still clear local
+  }
+  setLocalFlag(false);
 };

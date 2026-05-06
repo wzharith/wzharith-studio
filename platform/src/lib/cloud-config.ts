@@ -1,32 +1,37 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchConfig, isGoogleSyncEnabled, type SiteConfigData } from './google-sync';
+import { fetchConfig, type SiteConfigData, type SiteConfigFeatures } from './google-sync';
 import { siteConfig } from '@/config/site.config';
+
+/** Resolved feature flags for the main site (with defaults) */
+export interface ResolvedFeatures {
+  showPortfolio: boolean;
+  showCollaborators: boolean;
+  showDigitalProducts: boolean;
+  showProductLaunchNotify: boolean;
+  showSongCatalog: boolean;
+}
+
+const defaultFeatures = (): ResolvedFeatures => ({
+  showPortfolio: siteConfig.features.showPortfolio,
+  showCollaborators: siteConfig.features.showCollaborators,
+  showDigitalProducts: siteConfig.features.showDigitalProducts,
+  showProductLaunchNotify: siteConfig.features.showDigitalProducts,
+  showSongCatalog: siteConfig.features.showSongCatalog,
+});
 
 const CACHE_KEY = 'wzharith_cloud_config';
 const CACHE_EXPIRY_KEY = 'wzharith_cloud_config_expiry';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Feature flag to control whether main site uses cloud config or static file
- *
- * Set in .env.local:
- *   NEXT_PUBLIC_USE_CLOUD_CONFIG=true   -> Use Google Sheets (slower, always latest)
- *   NEXT_PUBLIC_USE_CLOUD_CONFIG=false  -> Use site.config.ts (instant, requires deploy)
- *
- * Default: false (static file)
+ * Cloud config is now the only source of truth (Neon Postgres via /api/config).
+ * The legacy `NEXT_PUBLIC_USE_CLOUD_CONFIG` flag is gone; these helpers always
+ * return true and remain only for backward compatibility with consumers.
  */
-export const useCloudConfigEnabled = (): boolean => {
-  return process.env.NEXT_PUBLIC_USE_CLOUD_CONFIG === 'true';
-};
-
-/**
- * Check if cloud config is enabled (non-hook version for SSR)
- */
-export const isCloudConfigEnabled = (): boolean => {
-  return process.env.NEXT_PUBLIC_USE_CLOUD_CONFIG === 'true';
-};
+export const useCloudConfigEnabled = (): boolean => true;
+export const isCloudConfigEnabled = (): boolean => true;
 
 export interface IncludedSegment {
   name: string;
@@ -170,50 +175,36 @@ export const useCloudConfig = (): CloudConfigState => {
       }
     }
 
-    // Fetch from cloud only; no hardcoded fallback
-    if (isGoogleSyncEnabled()) {
-      try {
-        console.log('[CloudConfig] Fetching from cloud...');
-        const result = await fetchConfig();
+    try {
+      const result = await fetchConfig();
 
-        if (result.success && result.config) {
-          const cloudPackages = result.config.packages;
-          const cloudAddons = result.config.addons;
+      if (result.success && result.config) {
+        const cloudPackages = result.config.packages;
+        const cloudAddons = result.config.addons;
 
-          const pkgs = Array.isArray(cloudPackages) ? cloudPackages : [];
-          const adds = Array.isArray(cloudAddons) ? cloudAddons : [];
+        const pkgs = Array.isArray(cloudPackages) ? cloudPackages : [];
+        const adds = Array.isArray(cloudAddons) ? cloudAddons : [];
 
-          setPackages(pkgs);
-          setAddons(adds);
+        setPackages(pkgs);
+        setAddons(adds);
 
-          // Cache the result
-          setCachedConfig({
-            ...result.config,
-            packages: pkgs,
-            addons: adds,
-          });
+        setCachedConfig({
+          ...result.config,
+          packages: pkgs,
+          addons: adds,
+        });
 
-          setLastUpdated(new Date());
-          console.log('[CloudConfig] Loaded from cloud:', { packages: pkgs.length, addons: adds.length });
-        } else {
-          // Cloud failed or empty: no fallback to hardcoded
-          console.log('[CloudConfig] Cloud fetch failed or empty, using empty config');
-          setPackages([]);
-          setAddons([]);
-          setError(result.error || 'Could not load from cloud. Configure backend or use Import from template in Admin.');
-        }
-      } catch (err) {
-        console.error('[CloudConfig] Error:', err);
+        setLastUpdated(new Date());
+      } else {
         setPackages([]);
         setAddons([]);
-        setError('Failed to fetch config');
+        setError(result.error || 'Could not load config from /api/config.');
       }
-    } else {
-      // Google sync not enabled: backend-only, so show empty
-      console.log('[CloudConfig] Google sync not enabled, packages/addons from backend only');
+    } catch (err) {
+      console.error('[CloudConfig] Error:', err);
       setPackages([]);
       setAddons([]);
-      setError('Cloud config disabled. Set NEXT_PUBLIC_USE_CLOUD_CONFIG and NEXT_PUBLIC_GOOGLE_SCRIPT_URL to load packages.');
+      setError('Failed to fetch config');
     }
 
     setIsLoading(false);
@@ -236,4 +227,35 @@ export const useCloudConfig = (): CloudConfigState => {
     lastUpdated,
     refresh,
   };
+};
+
+/**
+ * Resolve features from cloud config (when cloud enabled) or static site config.
+ * Use on the main site to respect admin-controlled module toggles.
+ */
+export const useCloudConfigFeatures = (): ResolvedFeatures => {
+  const [features, setFeatures] = useState<ResolvedFeatures>(defaultFeatures);
+
+  useEffect(() => {
+    const defaults = defaultFeatures();
+    const apply = (f: Partial<SiteConfigFeatures> | undefined) => {
+      setFeatures({
+        showPortfolio: f?.showPortfolio ?? defaults.showPortfolio,
+        showCollaborators: f?.showCollaborators ?? defaults.showCollaborators,
+        showDigitalProducts: f?.showDigitalProducts ?? defaults.showDigitalProducts,
+        showProductLaunchNotify: f?.showProductLaunchNotify ?? defaults.showProductLaunchNotify,
+        showSongCatalog: f?.showSongCatalog ?? defaults.showSongCatalog,
+      });
+    };
+    const cached = getCachedConfig();
+    if (cached?.features) {
+      apply(cached.features as Partial<SiteConfigFeatures>);
+      return;
+    }
+    fetchConfig().then((result) => {
+      apply(result.success && result.config?.features ? (result.config.features as Partial<SiteConfigFeatures>) : undefined);
+    });
+  }, []);
+
+  return features;
 };

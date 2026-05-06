@@ -1,3 +1,5 @@
+'use client';
+
 import Navigation from '@/components/Navigation';
 import Hero from '@/components/Hero';
 import About from '@/components/About';
@@ -8,21 +10,25 @@ import Collaborators from '@/components/Collaborators';
 import DigitalProducts from '@/components/DigitalProducts';
 import BookingForm from '@/components/BookingForm';
 import Footer from '@/components/Footer';
-import { siteConfig } from '@/config/site.config';
+import { useCloudConfigFeatures } from '@/lib/cloud-config';
 
 export default function Home() {
+  const features = useCloudConfigFeatures();
+
   return (
     <main className="relative">
-      <Navigation />
+      <Navigation features={features} />
       <Hero />
       <About />
-      {siteConfig.features.showSongCatalog && <SongCatalog />}
+      {features.showSongCatalog && <SongCatalog />}
       <Packages />
-      {siteConfig.features.showPortfolio && <Portfolio />}
-      {siteConfig.features.showCollaborators && <Collaborators />}
-      {siteConfig.features.showDigitalProducts && <DigitalProducts />}
+      {features.showPortfolio && <Portfolio />}
+      {features.showCollaborators && <Collaborators />}
+      {features.showDigitalProducts && (
+        <DigitalProducts showNotifyBlock={features.showProductLaunchNotify} />
+      )}
       <BookingForm />
-      <Footer />
+      <Footer features={features} />
     </main>
   );
 }

@@ -36,7 +36,12 @@ const products = [
   },
 ];
 
-export default function DigitalProducts() {
+interface DigitalProductsProps {
+  /** When false, hides the "Get Notified When Products Launch" signup block (default true) */
+  showNotifyBlock?: boolean;
+}
+
+export default function DigitalProducts({ showNotifyBlock = true }: DigitalProductsProps) {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
   const [phone, setPhone] = useState('');
@@ -119,51 +124,53 @@ export default function DigitalProducts() {
           ))}
         </div>
 
-        {/* Newsletter / Interest Form */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={isInView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.5 }}
-          className="glass rounded-2xl p-8 max-w-2xl mx-auto text-center"
-        >
-          <Music className="w-10 h-10 text-gold-400 mx-auto mb-4" />
-          <h3 className="font-display text-xl font-bold text-white mb-2">
-            Get Notified When Products Launch
-          </h3>
-          <p className="font-body text-sm text-midnight-400 mb-6">
-            Be the first to know when new backing tracks, sheet music, and educational
-            content becomes available.
-          </p>
+        {/* Newsletter / Interest Form - optional via feature flag */}
+        {showNotifyBlock && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={isInView ? { opacity: 1, y: 0 } : {}}
+            transition={{ delay: 0.5 }}
+            className="glass rounded-2xl p-8 max-w-2xl mx-auto text-center"
+          >
+            <Music className="w-10 h-10 text-gold-400 mx-auto mb-4" />
+            <h3 className="font-display text-xl font-bold text-white mb-2">
+              Get Notified When Products Launch
+            </h3>
+            <p className="font-body text-sm text-midnight-400 mb-6">
+              Be the first to know when new backing tracks, sheet music, and educational
+              content becomes available.
+            </p>
 
-          {isSubmitted ? (
-            <div className="flex items-center justify-center gap-2 text-gold-400">
-              <CheckCircle className="w-5 h-5" />
-              <span className="font-sans">Thank you! We&apos;ll notify you when products launch.</span>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
-              <div className="flex-1 relative">
-                <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-midnight-400" />
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+60 12-345 6789"
-                  className="w-full pl-10 pr-4 py-3 rounded-full bg-midnight-800/50 border border-midnight-700 text-white placeholder-midnight-400 focus:outline-none focus:border-gold-500 transition-colors"
-                  required
-                />
+            {isSubmitted ? (
+              <div className="flex items-center justify-center gap-2 text-gold-400">
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-sans">Thank you! We&apos;ll notify you when products launch.</span>
               </div>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="px-6 py-3 bg-gold-500 text-midnight-950 font-sans font-medium rounded-full hover:bg-gold-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isSubmitting ? 'Saving...' : 'Notify Me'}
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </form>
-          )}
-        </motion.div>
+            ) : (
+              <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+                <div className="flex-1 relative">
+                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-midnight-400" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+60 12-345 6789"
+                    className="w-full pl-10 pr-4 py-3 rounded-full bg-midnight-800/50 border border-midnight-700 text-white placeholder-midnight-400 focus:outline-none focus:border-gold-500 transition-colors"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-6 py-3 bg-gold-500 text-midnight-950 font-sans font-medium rounded-full hover:bg-gold-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Saving...' : 'Notify Me'}
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
+            )}
+          </motion.div>
+        )}
       </div>
     </section>
   );

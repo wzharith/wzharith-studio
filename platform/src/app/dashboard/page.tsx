@@ -90,10 +90,21 @@ export default function Dashboard() {
 
   // Check authentication (shared auth)
   useEffect(() => {
-    if (checkAuth()) {
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false);
+    let active = true;
+    (async () => {
+      if (checkAuth()) {
+        if (active) setIsAuthenticated(true);
+      }
+      const { verifyAuthWithServer } = await import('@/lib/auth');
+      const ok = await verifyAuthWithServer();
+      if (active) {
+        setIsAuthenticated(ok);
+        setIsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Load data on auth
@@ -103,9 +114,10 @@ export default function Dashboard() {
     }
   }, [isAuthenticated]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (doLogin(password)) {
+    const ok = await doLogin(password);
+    if (ok) {
       setIsAuthenticated(true);
       setError('');
     } else {

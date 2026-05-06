@@ -2,7 +2,7 @@
 
 import { useRef, useMemo } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Check, Sparkles, Clock, Music, Loader2, Package } from 'lucide-react';
+import { Check, Sparkles, Music, Loader2, Package } from 'lucide-react';
 import { useCloudConfig } from '@/lib/cloud-config';
 
 export default function Packages() {
@@ -84,7 +84,7 @@ export default function Packages() {
               initial={{ opacity: 0, y: 30 }}
               animate={isInView ? { opacity: 1, y: 0 } : {}}
               transition={{ delay: i * 0.1 }}
-              className={`relative glass rounded-2xl p-6 card-hover ${
+              className={`relative glass rounded-2xl p-6 card-hover flex flex-col ${
                 pkg.popular ? 'ring-2 ring-gold-500' : ''
               }`}
             >
@@ -95,76 +95,71 @@ export default function Packages() {
                 </div>
               )}
 
+              {/* Card header: name, price, description */}
               <div className="text-center mb-6">
-                <h3 className="font-display text-xl font-semibold text-white mb-2">
+                <h3 className="font-display text-xl font-semibold text-white mb-3">
                   {pkg.name}
                 </h3>
-                <div className="mb-2">
+                <div className="mb-3">
                   {pkg.priceNote && (
-                    <span className="text-midnight-400 text-xs block mb-1">
+                    <span className="text-midnight-400 text-xs uppercase tracking-wider block mb-0.5">
                       {pkg.priceNote}
                     </span>
                   )}
-                  <span className="font-display text-3xl font-bold gold-text">
+                  <span className="font-display text-3xl font-bold gold-text tabular-nums">
                     {pkg.priceDisplay}
                   </span>
                 </div>
-                <p className="font-body text-sm text-midnight-400">
+                <p className="font-body text-sm text-midnight-400 leading-relaxed max-w-[240px] mx-auto">
                   {pkg.description}
                 </p>
+                {pkg.songs && (
+                  <div className="inline-flex items-center gap-2 mt-3 px-3 py-1.5 rounded-full bg-midnight-700/50 border border-midnight-600/50">
+                    <Music className="w-4 h-4 text-gold-400 flex-shrink-0" />
+                    <span className="font-sans text-xs font-medium text-midnight-300">{pkg.songs}</span>
+                  </div>
+                )}
               </div>
 
-              {/* Stats */}
-              {(pkg.songs || pkg.duration) && (
-              <div className="flex justify-center gap-4 mb-6 pb-6 border-b border-midnight-700">
-                  {pkg.songs && (
-                <div className="text-center">
-                  <Music className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                  <span className="text-xs text-midnight-400">{pkg.songs}</span>
-                </div>
-                  )}
-                  {pkg.duration && (
-                <div className="text-center">
-                  <Clock className="w-4 h-4 text-gold-400 mx-auto mb-1" />
-                  <span className="text-xs text-midnight-400">{pkg.duration}</span>
-                </div>
-                  )}
+              {/* What's included – left-aligned for readability, uniform min-height */}
+              <div className="flex-1 flex flex-col min-h-[180px] text-left">
+                <h4 className="font-sans text-xs font-semibold text-midnight-400 uppercase tracking-wider mb-3">
+                  What&apos;s included
+                </h4>
+                {pkg.includedSegments?.length ? (
+                  <ul className="space-y-2.5 flex-1">
+                    {pkg.includedSegments.map((seg, j) => (
+                      <li key={j} className="flex items-start gap-2.5">
+                        <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" aria-hidden />
+                        <span className="font-sans text-sm text-midnight-300 leading-snug">
+                          {seg.name}{seg.quantity !== 1 ? ` × ${seg.quantity}` : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : pkg.features?.length ? (
+                  <ul className="space-y-2.5 flex-1">
+                    {pkg.features.map((feature, j) => (
+                      <li key={j} className="flex items-start gap-2.5">
+                        <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" aria-hidden />
+                        <span className="font-sans text-sm text-midnight-300 leading-snug">
+                          {feature}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="font-sans text-sm text-midnight-500 italic">Details in quote</p>
+                )}
               </div>
-              )}
 
-              {/* What's included: segments (from backend) or features */}
-              {pkg.includedSegments?.length ? (
-                <ul className="space-y-3 mb-6">
-                  <span className="font-sans text-xs text-midnight-500 block mb-2">What&apos;s included</span>
-                  {pkg.includedSegments.map((seg, j) => (
-                    <li key={j} className="flex items-start gap-2">
-                      <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
-                      <span className="font-sans text-sm text-midnight-300">
-                        {seg.name}{seg.quantity !== 1 ? ` × ${seg.quantity}` : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <ul className="space-y-3 mb-6">
-                  {pkg.features.map((feature, j) => (
-                    <li key={j} className="flex items-start gap-2">
-                      <Check className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
-                      <span className="font-sans text-sm text-midnight-300">
-                        {feature}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {/* CTA */}
+              {/* CTA – mt-auto keeps button at bottom when card content height varies */}
               <a
                 href="#booking"
-                className={`block w-full py-3 rounded-full text-center font-sans font-medium transition-all ${
+                className={`mt-auto pt-6 block w-full py-3.5 rounded-full text-center font-sans text-sm font-semibold transition-all duration-200 ${
                   pkg.popular
-                    ? 'bg-gold-500 text-midnight-950 hover:bg-gold-400'
-                    : 'glass text-gold-400 hover:bg-gold-500/10'
+                    ? 'bg-gold-500 text-midnight-950 hover:bg-gold-400 hover:shadow-lg hover:shadow-gold-500/20'
+                    : 'glass text-gold-400 hover:bg-gold-500/10 hover:text-gold-300'
                 }`}
               >
                 Select Package

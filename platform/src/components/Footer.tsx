@@ -2,6 +2,7 @@
 
 import { Music, Instagram, MessageCircle, Mail, Heart, Youtube } from 'lucide-react';
 import { siteConfig, getWhatsAppUrl, getSocialUrl, getPhoneDisplay, getSsmShort } from '@/config/site.config';
+import type { ResolvedFeatures } from '@/lib/cloud-config';
 
 // TikTok icon component (not available in Lucide)
 const TikTokIcon = ({ className }: { className?: string }) => (
@@ -12,13 +13,23 @@ const TikTokIcon = ({ className }: { className?: string }) => (
 
 const quickLinks = [
   { href: '#about', label: 'About' },
-  { href: '#songs', label: 'Repertoire' },
+  { href: '#songs', label: 'Repertoire', showIf: 'showSongCatalog' as const },
   { href: '#packages', label: 'Packages' },
-  { href: '#portfolio', label: 'Portfolio' },
+  { href: '#portfolio', label: 'Portfolio', showIf: 'showPortfolio' as const },
   { href: '#booking', label: 'Book Now' },
 ];
 
-export default function Footer() {
+interface FooterProps {
+  features?: ResolvedFeatures;
+}
+
+export default function Footer({ features: featuresProp }: FooterProps = {}) {
+  const features = featuresProp ?? siteConfig.features;
+  const visibleQuickLinks = quickLinks.filter((link) => {
+    if (!('showIf' in link) || !link.showIf) return true;
+    const key = link.showIf as keyof typeof features;
+    return Boolean(features[key]);
+  });
   // Build social links from config
   const socialLinks = [
     siteConfig.social.instagram && {
@@ -85,7 +96,7 @@ export default function Footer() {
           <div>
             <h4 className="font-sans font-semibold text-white mb-4">Quick Links</h4>
             <ul className="space-y-2">
-              {quickLinks.map((link) => (
+              {visibleQuickLinks.map((link) => (
                 <li key={link.href}>
                   <a
                     href={link.href}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, Plus, Trash2, Lock, Eye, EyeOff, Settings, Package, DollarSign, Building2, Phone, Share2, CreditCard, FileText, Truck, Star, FileText as InvoiceIcon, LayoutDashboard, Home, Archive, Calendar, ChevronDown, ChevronUp, Pencil, Layout, Copy } from 'lucide-react';
 import Link from 'next/link';
 import {
   isGoogleSyncEnabled,
@@ -10,6 +10,7 @@ import {
   archiveConfig,
   fetchConfigHistory,
   type SiteConfigData,
+  type SiteConfigFeatures,
   type ConfigHistoryEntry,
 } from '@/lib/google-sync';
 import { clearConfigCache } from '@/lib/cloud-config';
@@ -58,7 +59,11 @@ export default function AdminSettings() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [lastSavedConfigState, setLastSavedConfigState] = useState<string>('');
+  const [lastSavedRestState, setLastSavedRestState] = useState<string>('');
+  const [lastSavedPackagesState, setLastSavedPackagesState] = useState<string>('');
+  const [lastSavedAddonsState, setLastSavedAddonsState] = useState<string>('');
   const [justSaved, setJustSaved] = useState(false);
+  const [sectionSaveType, setSectionSaveType] = useState<'all' | 'rest' | 'packages' | 'addons' | null>(null);
 
   // Active section
   const [activeSection, setActiveSection] = useState('business');
@@ -67,6 +72,7 @@ export default function AdminSettings() {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [addons, setAddons] = useState<AddonItem[]>([]);
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
+  const [packageFilter, setPackageFilter] = useState<'all' | 'visible' | 'hidden'>('all');
 
   // Collaboration partners state
   const [collaborationPartners, setCollaborationPartners] = useState<string[]>(['Baskara', 'Primadona', 'Skyeglass']);
@@ -111,10 +117,21 @@ export default function AdminSettings() {
 
   // Check authentication (shared auth)
   useEffect(() => {
-    if (checkAuth()) {
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false);
+    let active = true;
+    (async () => {
+      if (checkAuth()) {
+        if (active) setIsAuthenticated(true);
+      }
+      const { verifyAuthWithServer } = await import('@/lib/auth');
+      const ok = await verifyAuthWithServer();
+      if (active) {
+        setIsAuthenticated(ok);
+        setIsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Stable snapshot of config for change detection (sort keys so comparison is consistent)
@@ -145,6 +162,38 @@ export default function AdminSettings() {
     return currentConfigState !== lastSavedConfigState;
   }, [currentConfigState, lastSavedConfigState]);
 
+  // Rest chunk: everything except packages/addons (for section-level save)
+  const getRestChunk = useCallback((): Record<string, unknown> => ({
+    ...config,
+    collaborationPartners,
+  }), [config, collaborationPartners]);
+
+  const currentRestState = useMemo(
+    () => JSON.stringify(sortObjectKeys(getRestChunk())),
+    [getRestChunk, sortObjectKeys]
+  );
+  const currentPackagesState = useMemo(
+    () => JSON.stringify(sortObjectKeys(packages)),
+    [packages, sortObjectKeys]
+  );
+  const currentAddonsState = useMemo(
+    () => JSON.stringify(sortObjectKeys(addons)),
+    [addons, sortObjectKeys]
+  );
+
+  const hasUnsavedRest = useMemo(() => {
+    if (lastSavedRestState === '') return true;
+    return currentRestState !== lastSavedRestState;
+  }, [currentRestState, lastSavedRestState]);
+  const hasUnsavedPackages = useMemo(() => {
+    if (lastSavedPackagesState === '') return true;
+    return currentPackagesState !== lastSavedPackagesState;
+  }, [currentPackagesState, lastSavedPackagesState]);
+  const hasUnsavedAddons = useMemo(() => {
+    if (lastSavedAddonsState === '') return true;
+    return currentAddonsState !== lastSavedAddonsState;
+  }, [currentAddonsState, lastSavedAddonsState]);
+
   // Load config on auth
   useEffect(() => {
     if (isAuthenticated) {
@@ -153,9 +202,10 @@ export default function AdminSettings() {
     }
   }, [isAuthenticated]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (doLogin(password)) {
+    const ok = await doLogin(password);
+    if (ok) {
       setIsAuthenticated(true);
       setError('');
     } else {
@@ -185,6 +235,13 @@ export default function AdminSettings() {
     terms_balanceDueDays: siteConfig.terms.balanceDueDays,
     terms_cancellationPolicy: siteConfig.terms.cancellationPolicy,
     terms_latePayment: siteConfig.terms.latePaymentPolicy,
+    features: {
+      showPortfolio: siteConfig.features.showPortfolio,
+      showCollaborators: siteConfig.features.showCollaborators,
+      showDigitalProducts: siteConfig.features.showDigitalProducts,
+      showProductLaunchNotify: siteConfig.features.showDigitalProducts,
+      showSongCatalog: siteConfig.features.showSongCatalog,
+    },
   });
 
   const getDefaultPackages = (): PackageItem[] =>
@@ -229,8 +286,12 @@ export default function AdminSettings() {
         setConfig(defaultConfig);
         setPackages([]);
         setAddons([]);
-        const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: ['Baskara', 'Primadona', 'Skyeglass'] };
+        const partners = ['Baskara', 'Primadona', 'Skyeglass'];
+        const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: partners };
         setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
+        setLastSavedRestState(JSON.stringify(sortObjectKeys({ ...defaultConfig, collaborationPartners: partners })));
+        setLastSavedPackagesState(JSON.stringify(sortObjectKeys([])));
+        setLastSavedAddonsState(JSON.stringify(sortObjectKeys([])));
       } else {
         // Smart merge for business/config fields; packages/addons from backend only
         const mergedConfig: SiteConfigData = { ...defaultConfig };
@@ -239,6 +300,8 @@ export default function AdminSettings() {
             (mergedConfig as Record<string, unknown>)[key] = value;
           }
         });
+        // Merge features so cloud overrides defaults but we keep all keys
+        mergedConfig.features = { ...defaultConfig.features, ...(result.config?.features || {}) };
         setConfig(mergedConfig);
 
         const cloudPackages = result.config?.packages;
@@ -251,21 +314,29 @@ export default function AdminSettings() {
         if (Array.isArray(cloudPartners) && cloudPartners.length > 0) {
           setCollaborationPartners(cloudPartners);
         }
+        const partners = Array.isArray(cloudPartners) && cloudPartners.length > 0 ? cloudPartners : ['Baskara', 'Primadona', 'Skyeglass'];
         const fullConfig = {
           ...mergedConfig,
           packages: Array.isArray(cloudPackages) ? cloudPackages : [],
           addons: Array.isArray(cloudAddons) ? cloudAddons : [],
-          collaborationPartners: Array.isArray(cloudPartners) && cloudPartners.length > 0 ? cloudPartners : ['Baskara', 'Primadona', 'Skyeglass'],
+          collaborationPartners: partners,
         };
         setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
+        setLastSavedRestState(JSON.stringify(sortObjectKeys({ ...mergedConfig, collaborationPartners: partners })));
+        setLastSavedPackagesState(JSON.stringify(sortObjectKeys(Array.isArray(cloudPackages) ? cloudPackages : [])));
+        setLastSavedAddonsState(JSON.stringify(sortObjectKeys(Array.isArray(cloudAddons) ? cloudAddons : [])));
       }
     } else {
       // No Google sync: backend-only, show empty
       setConfig(defaultConfig);
       setPackages([]);
       setAddons([]);
-      const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: ['Baskara', 'Primadona', 'Skyeglass'] };
+      const partners = ['Baskara', 'Primadona', 'Skyeglass'];
+      const fullConfig = { ...defaultConfig, packages: [] as PackageItem[], addons: [] as AddonItem[], collaborationPartners: partners };
       setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
+      setLastSavedRestState(JSON.stringify(sortObjectKeys({ ...defaultConfig, collaborationPartners: partners })));
+      setLastSavedPackagesState(JSON.stringify(sortObjectKeys([])));
+      setLastSavedAddonsState(JSON.stringify(sortObjectKeys([])));
     }
 
     setIsRefreshing(false);
@@ -323,6 +394,7 @@ export default function AdminSettings() {
 
   const handleSave = async () => {
     setIsSaving(true);
+    setSectionSaveType('all');
     setSaveMessage('');
 
     const fullConfig = {
@@ -337,6 +409,9 @@ export default function AdminSettings() {
     if (result.success) {
       setSaveMessage('Settings saved successfully!');
       setLastSavedConfigState(JSON.stringify(sortObjectKeys(fullConfig)));
+      setLastSavedRestState(JSON.stringify(sortObjectKeys(getRestChunk())));
+      setLastSavedPackagesState(JSON.stringify(sortObjectKeys(packages)));
+      setLastSavedAddonsState(JSON.stringify(sortObjectKeys(addons)));
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 2000);
       clearConfigCache();
@@ -345,11 +420,74 @@ export default function AdminSettings() {
     }
 
     setIsSaving(false);
+    setSectionSaveType(null);
+    setTimeout(() => setSaveMessage(''), 3000);
+  };
+
+  const handleSaveRest = async () => {
+    if (!isGoogleSyncEnabled()) return;
+    setIsSaving(true);
+    setSectionSaveType('rest');
+    setSaveMessage('');
+    const restChunk = getRestChunk() as SiteConfigData;
+    const result = await saveConfigToGoogle(restChunk);
+    if (result.success) {
+      setSaveMessage('Settings saved!');
+      setLastSavedRestState(JSON.stringify(sortObjectKeys(restChunk)));
+      clearConfigCache();
+    } else {
+      setSaveMessage('Error: ' + (result.error || 'Failed to save'));
+    }
+    setIsSaving(false);
+    setSectionSaveType(null);
+    setTimeout(() => setSaveMessage(''), 3000);
+  };
+
+  const handleSavePackages = async () => {
+    if (!isGoogleSyncEnabled()) return;
+    setIsSaving(true);
+    setSectionSaveType('packages');
+    setSaveMessage('');
+    const result = await saveConfigToGoogle({ packages });
+    if (result.success) {
+      setSaveMessage('Packages saved!');
+      setLastSavedPackagesState(JSON.stringify(sortObjectKeys(packages)));
+      clearConfigCache();
+    } else {
+      setSaveMessage('Error: ' + (result.error || 'Failed to save'));
+    }
+    setIsSaving(false);
+    setSectionSaveType(null);
+    setTimeout(() => setSaveMessage(''), 3000);
+  };
+
+  const handleSaveAddons = async () => {
+    if (!isGoogleSyncEnabled()) return;
+    setIsSaving(true);
+    setSectionSaveType('addons');
+    setSaveMessage('');
+    const result = await saveConfigToGoogle({ addons });
+    if (result.success) {
+      setSaveMessage('Add-ons saved!');
+      setLastSavedAddonsState(JSON.stringify(sortObjectKeys(addons)));
+      clearConfigCache();
+    } else {
+      setSaveMessage('Error: ' + (result.error || 'Failed to save'));
+    }
+    setIsSaving(false);
+    setSectionSaveType(null);
     setTimeout(() => setSaveMessage(''), 3000);
   };
 
   const updateConfig = (key: keyof SiteConfigData, value: string | number) => {
     setConfig(prev => ({ ...prev, [key]: value }));
+  };
+
+  const updateFeature = (key: keyof SiteConfigFeatures, value: boolean) => {
+    setConfig(prev => ({
+      ...prev,
+      features: { ...(prev.features || {}), [key]: value },
+    }));
   };
 
   // Package management
@@ -412,22 +550,29 @@ export default function AdminSettings() {
     }));
   };
 
-  const TIER_TEMPLATES: { label: string; segments: IncludedSegment[] }[] = [
-    { label: 'Entrance only', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }] },
-    { label: 'Entrance + Cake', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }] },
-    { label: 'Entrance + Cake + Meal', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }] },
-    { label: 'Entrance + Cake + Meal + Photo', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }, { name: 'Photography Session', quantity: 3 }] },
-    { label: 'Full (+ Moment of Blessing)', segments: [{ name: 'Walk Down the Aisle', quantity: 1 }, { name: 'Moment of Blessing', quantity: 1 }, { name: 'Meal Accompaniment', quantity: 4 }, { name: 'Cake Slicing', quantity: 1 }, { name: 'Photography Session', quantity: 3 }] },
-  ];
-
-  const applyTierTemplate = (pkgId: string, template: IncludedSegment[]) => {
-    setPackages(packages.map(pkg => pkg.id === pkgId ? { ...pkg, includedSegments: [...template] } : pkg));
-  };
-
   const removePackage = (id: string) => {
     setPackages(packages.filter(pkg => pkg.id !== id));
     if (editingPackageId === id) setEditingPackageId(null);
   };
+
+  const duplicatePackage = (sourceId: string) => {
+    const source = packages.find(pkg => pkg.id === sourceId);
+    if (!source) return;
+    const newId = Date.now().toString();
+    const copy: PackageItem = {
+      ...source,
+      id: newId,
+      name: (source.name || '').trim() ? `${source.name} (copy)` : source.name,
+    };
+    setPackages([...packages, copy]);
+    setEditingPackageId(newId);
+  };
+
+  const filteredPackages = useMemo(() => {
+    if (packageFilter === 'visible') return packages.filter(pkg => !pkg.hidden);
+    if (packageFilter === 'hidden') return packages.filter(pkg => pkg.hidden === true);
+    return packages;
+  }, [packages, packageFilter]);
 
   // Addon management
   const addAddon = () => {
@@ -470,6 +615,7 @@ export default function AdminSettings() {
     { id: 'collaborations', label: 'Collaborations', icon: Star },
     { id: 'transport', label: 'Transport', icon: Truck },
     { id: 'terms', label: 'Terms', icon: FileText },
+    { id: 'modules', label: 'Modules', icon: Layout },
     { id: 'sync', label: 'Sync', icon: RefreshCw },
   ];
 
@@ -592,7 +738,7 @@ export default function AdminSettings() {
               className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-500 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-lg text-sm font-medium"
             >
               <Save className="w-4 h-4" />
-              {isSaving ? 'Saving...' : justSaved ? 'Saved!' : 'Save Changes'}
+              {isSaving && sectionSaveType === 'all' ? 'Saving...' : justSaved ? 'Saved!' : 'Save all'}
             </button>
           </div>
         </div>
@@ -677,6 +823,19 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -716,6 +875,19 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -765,6 +937,19 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -804,6 +989,19 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -814,14 +1012,25 @@ export default function AdminSettings() {
                   <h2 className="text-lg font-semibold text-slate-800">Service Packages</h2>
                   <div className="flex items-center gap-2">
                     {isGoogleSyncEnabled() && (
-                      <button
-                        type="button"
-                        onClick={handleImportFromTemplate}
-                        className="flex items-center gap-2 bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm hover:bg-slate-300"
-                      >
-                        <FileText className="w-4 h-4" />
-                        Import from template
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleSavePackages}
+                          disabled={!hasUnsavedPackages || isSaving}
+                          className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-sm font-medium"
+                        >
+                          <Save className="w-4 h-4" />
+                          {isSaving && sectionSaveType === 'packages' ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleImportFromTemplate}
+                          className="flex items-center gap-2 bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm hover:bg-slate-300"
+                        >
+                          <FileText className="w-4 h-4" />
+                          Import from template
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={addPackage}
@@ -832,11 +1041,37 @@ export default function AdminSettings() {
                     </button>
                   </div>
                 </div>
+                {packages.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-slate-600">Show:</span>
+                    <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+                      {(['all', 'visible', 'hidden'] as const).map((f) => (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setPackageFilter(f)}
+                          className={`px-3 py-1.5 text-sm font-medium capitalize ${
+                            packageFilter === f ? 'bg-amber-500 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {f === 'all' ? 'All' : f === 'visible' ? 'Visible' : 'Hidden'}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      {packageFilter === 'all' && `${packages.length} total`}
+                      {packageFilter === 'visible' && `${filteredPackages.length} visible`}
+                      {packageFilter === 'hidden' && `${filteredPackages.length} hidden`}
+                    </span>
+                  </div>
+                )}
                 <div className="space-y-3">
                   {packages.length === 0 ? (
                     <p className="text-slate-500 text-center py-8">No packages yet. Click &quot;Add Package&quot; to create one, or &quot;Import from template&quot; to load defaults from site config.</p>
+                  ) : filteredPackages.length === 0 ? (
+                    <p className="text-slate-500 text-center py-8">No packages match the current filter. Change filter or add a package.</p>
                   ) : (
-                    packages.map((pkg, index) => (
+                    filteredPackages.map((pkg, index) => (
                       <div key={pkg.id} className="border rounded-lg overflow-hidden hover:border-amber-300 transition-colors">
                         {/* Compact row: name, price, duration, songs, badges, Edit, Delete */}
                         <div className="flex items-center justify-between gap-4 p-4 bg-white">
@@ -864,6 +1099,15 @@ export default function AdminSettings() {
                             >
                               <Pencil className="w-4 h-4" />
                               {editingPackageId === pkg.id ? 'Cancel' : 'Edit'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => duplicatePackage(pkg.id)}
+                              className="flex items-center gap-1 px-2 py-1.5 text-slate-600 hover:bg-slate-100 rounded text-sm"
+                              title="Duplicate package"
+                            >
+                              <Copy className="w-4 h-4" />
+                              Duplicate
                             </button>
                             <button
                               type="button"
@@ -942,21 +1186,8 @@ export default function AdminSettings() {
                               />
                             </div>
                             <div>
-                              <label className="block text-xs text-slate-500 mb-1">Included segments (for invoice &amp; package card)</label>
+                              <label className="block text-xs text-slate-500 mb-1">Included segments</label>
                               <div className="flex flex-wrap items-center gap-2 mb-2">
-                                <select
-                                  className="px-2 py-1.5 border rounded text-sm text-slate-600"
-                                  onChange={(e) => {
-                                    const idx = e.target.selectedIndex;
-                                    if (idx > 0) applyTierTemplate(pkg.id, TIER_TEMPLATES[idx - 1].segments);
-                                    e.target.selectedIndex = 0;
-                                  }}
-                                >
-                                  <option value="">Use tier template...</option>
-                                  {TIER_TEMPLATES.map((t, i) => (
-                                    <option key={i} value={i}>{t.label}</option>
-                                  ))}
-                                </select>
                                 <button
                                   type="button"
                                   onClick={() => addPackageSegment(pkg.id)}
@@ -1035,15 +1266,28 @@ export default function AdminSettings() {
             {/* Add-ons Section */}
             {activeSection === 'addons' && (
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h2 className="text-lg font-semibold text-slate-800">Add-on Services</h2>
-                  <button
-                    onClick={addAddon}
-                    className="flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-lg text-sm hover:bg-amber-600"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Item
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {isGoogleSyncEnabled() && (
+                      <button
+                        type="button"
+                        onClick={handleSaveAddons}
+                        disabled={!hasUnsavedAddons || isSaving}
+                        className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-sm font-medium"
+                      >
+                        <Save className="w-4 h-4" />
+                        {isSaving && sectionSaveType === 'addons' ? 'Saving...' : 'Save'}
+                      </button>
+                    )}
+                    <button
+                      onClick={addAddon}
+                      className="flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-lg text-sm hover:bg-amber-600"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Item
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-3">
                   {addons.length === 0 ? (
@@ -1161,6 +1405,19 @@ export default function AdminSettings() {
                     ))
                   )}
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1201,6 +1458,19 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1248,6 +1518,70 @@ export default function AdminSettings() {
                     />
                   </div>
                 </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modules (Feature flags) Section */}
+            {activeSection === 'modules' && (
+              <div className="space-y-6">
+                <h2 className="text-lg font-semibold text-slate-800">Site Modules</h2>
+                <p className="text-sm text-slate-500">
+                  Turn sections on or off on the main site. Changes apply when using cloud config.
+                </p>
+                <div className="space-y-4">
+                  {[
+                    { key: 'showPortfolio' as const, label: 'Recent Performances', description: 'Portfolio / past performances section' },
+                    { key: 'showCollaborators' as const, label: 'Collaborations', description: 'Collaboration partners section' },
+                    { key: 'showDigitalProducts' as const, label: 'Digital Products', description: 'Digital products (coming soon) section' },
+                    { key: 'showProductLaunchNotify' as const, label: 'Get Notified When Products Launch', description: 'Signup block inside Digital Products' },
+                    { key: 'showSongCatalog' as const, label: 'Repertoire (Song Catalog)', description: 'Song list / repertoire section' },
+                  ].map(({ key, label, description }) => (
+                    <div key={key} className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
+                      <div>
+                        <p className="font-medium text-slate-800">{label}</p>
+                        <p className="text-sm text-slate-500">{description}</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={config.features?.[key] !== false}
+                          onChange={(e) => updateFeature(key, e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-amber-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500" />
+                        <span className="ms-3 text-sm font-medium text-slate-700">
+                          {config.features?.[key] !== false ? 'On' : 'Off'}
+                        </span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                {isGoogleSyncEnabled() && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveRest}
+                      disabled={!hasUnsavedRest || isSaving}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving && sectionSaveType === 'rest' ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1412,17 +1746,13 @@ export default function AdminSettings() {
                   </p>
                 </div>
 
-                {/* Feature Flag Info */}
+                {/* Cloud sync info */}
                 <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                  <h3 className="font-medium text-blue-800 mb-2">Feature Flag (Advanced)</h3>
-                  <p className="text-sm text-blue-700 mb-2">
-                    Want the main site to load packages from cloud instead of static file?
-                  </p>
-                  <p className="text-sm text-blue-600">
-                    Set <code className="bg-blue-100 px-1 rounded">NEXT_PUBLIC_USE_CLOUD_CONFIG=true</code> in your environment.
-                  </p>
-                  <p className="text-xs text-blue-500 mt-2">
-                    Note: Cloud loading may add ~1-2s delay on first page load.
+                  <h3 className="font-medium text-blue-800 mb-2">Cloud sync</h3>
+                  <p className="text-sm text-blue-700">
+                    Packages, addons, and business config sync directly with Postgres via this app&apos;s
+                    API. Changes saved here are visible on the public site within seconds (cached for 5
+                    minutes per browser).
                   </p>
                 </div>
               </div>

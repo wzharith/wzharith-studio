@@ -9,7 +9,7 @@
 import { siteConfig, getPhoneDisplay } from '@/config/site.config';
 
 // Website URLs for linking in messages
-const WEBSITE_BASE = 'https://wzharith.github.io/wzharith-studio';
+const WEBSITE_BASE = process.env.NEXT_PUBLIC_SITE_URL || 'https://wzharith.com';
 const WEBSITE_SONGS = `${WEBSITE_BASE}/#songs`;
 const WEBSITE_PACKAGES = `${WEBSITE_BASE}/#packages`;
 const WEBSITE_PORTFOLIO = `${WEBSITE_BASE}/#portfolio`;

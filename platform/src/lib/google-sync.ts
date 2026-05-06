@@ -1,33 +1,48 @@
 /**
- * Google Apps Script API Integration
+ * Studio API client.
  *
- * Handles syncing invoices and events with Google Sheets and Calendar
+ * Wraps calls to the Next.js /api routes (Neon-backed). The module name and
+ * exported types are unchanged from the previous Google Apps Script version,
+ * so consumers don't need to rename imports.
+ *
+ * NOTE: `isGoogleSyncEnabled()` is retained for backward compatibility but
+ * always returns true now — sync runs through our own API routes which are
+ * always available when the app is deployed.
  */
 
-const GOOGLE_SCRIPT_URL = process.env.NEXT_PUBLIC_GOOGLE_SCRIPT_URL || '';
+export type LeadSource =
+  | 'Web'
+  | 'Instagram'
+  | 'WhatsApp'
+  | 'TikTok'
+  | 'Referral'
+  | 'Collaboration'
+  | 'Other'
+  | '';
 
-// Debug: Log if Google sync is configured (runs once at module load)
-if (typeof window !== 'undefined') {
-  console.log('[GoogleSync] URL configured:', GOOGLE_SCRIPT_URL ? 'YES (' + GOOGLE_SCRIPT_URL.substring(0, 50) + '...)' : 'NO - secrets not set during build');
-}
-
-export type LeadSource = 'Web' | 'Instagram' | 'WhatsApp' | 'TikTok' | 'Referral' | 'Collaboration' | 'Other' | '';
-
-// Enhanced status system for accurate workflow tracking
 export type InvoiceStatus =
-  | 'quotation_draft'    // Initial quote created
-  | 'quotation_sent'     // Quote sent to client
-  | 'deposit_received'   // Deposit paid, booking confirmed
-  | 'invoice_sent'       // Invoice sent after deposit
-  | 'balance_paid'       // Full payment received
-  | 'completed'          // Event performed
-  | 'archived'           // Feedback collected, case closed
-  | 'cancelled'          // Cancelled at any stage
-  // Legacy statuses for backward compatibility
-  | 'draft' | 'sent' | 'paid';
+  | 'quotation_draft'
+  | 'quotation_sent'
+  | 'deposit_received'
+  | 'invoice_sent'
+  | 'balance_paid'
+  | 'completed'
+  | 'archived'
+  | 'cancelled'
+  | 'draft'
+  | 'sent'
+  | 'paid';
 
 export type PaymentStatus = 'none' | 'deposit' | 'partial' | 'full';
 export type FeedbackStatus = 'pending' | 'requested' | 'received' | 'reviewed';
+
+export interface InvoiceItem {
+  id: string;
+  description: string;
+  details: string;
+  quantity: number;
+  rate: number;
+}
 
 export interface StoredInvoice {
   id: string;
@@ -46,23 +61,20 @@ export interface StoredInvoice {
   items: InvoiceItem[];
   discount: number;
   discountType: 'amount' | 'percent';
-  depositRequested?: number; // NEW: Deposit amount requested on quotation
-  depositPaid: number;       // Actual deposit received (on invoice)
+  depositRequested?: number;
+  depositPaid: number;
   total: number;
   createdAt: string;
   status: InvoiceStatus;
   linkedQuotationNumber?: string;
+  linkedQuotation?: string;
   convertedAt?: string;
-  deletedAt?: string; // Soft delete timestamp
+  deletedAt?: string;
   leadSource?: LeadSource;
   collaborationPartner?: string;
-
-  // NEW: Payment tracking
   paymentStatus?: PaymentStatus;
   depositReceivedDate?: string;
   balanceReceivedDate?: string;
-
-  // NEW: Lifecycle tracking
   calendarEventId?: string;
   calendarCreated?: boolean;
   invoiceSentDate?: string;
@@ -71,57 +83,30 @@ export interface StoredInvoice {
   feedbackStatus?: FeedbackStatus;
 }
 
-export interface InvoiceItem {
-  id: string;
-  description: string;
-  details: string;
-  quantity: number;
-  rate: number;
-}
-
 /**
- * Migrate legacy status values to new status system
- * This function should be called when loading invoices to ensure backward compatibility
+ * Migrate legacy status values to the new system. Pure data transformation —
+ * runs locally in the browser as an extra safety net.
  */
 export function migrateInvoiceStatus(invoice: StoredInvoice): StoredInvoice {
   const migrated = { ...invoice };
 
-  // Migrate legacy statuses to new status system
   if (invoice.status === 'draft') {
-    if (invoice.documentType === 'quotation') {
-      migrated.status = 'quotation_draft';
-    } else {
-      // Invoice with draft status - likely should be deposit_received
-      migrated.status = 'deposit_received';
-    }
+    migrated.status = invoice.documentType === 'quotation' ? 'quotation_draft' : 'deposit_received';
   } else if (invoice.status === 'sent') {
-    if (invoice.documentType === 'quotation') {
-      migrated.status = 'quotation_sent';
-    } else {
-      migrated.status = 'invoice_sent';
-    }
+    migrated.status = invoice.documentType === 'quotation' ? 'quotation_sent' : 'invoice_sent';
   } else if (invoice.status === 'paid') {
     migrated.status = 'balance_paid';
     migrated.paymentStatus = 'full';
   }
 
-  // Infer paymentStatus from depositPaid if not set
   if (!migrated.paymentStatus || migrated.paymentStatus === 'none') {
     if (invoice.depositPaid > 0) {
       const balance = invoice.total - invoice.depositPaid;
-      if (balance <= 0) {
-        migrated.paymentStatus = 'full';
-      } else {
-        migrated.paymentStatus = 'deposit';
-      }
+      migrated.paymentStatus = balance <= 0 ? 'full' : 'deposit';
     }
   }
 
-  // Infer feedbackStatus if not set
-  if (!migrated.feedbackStatus) {
-    migrated.feedbackStatus = 'pending';
-  }
-
+  if (!migrated.feedbackStatus) migrated.feedbackStatus = 'pending';
   return migrated;
 }
 
@@ -183,60 +168,30 @@ export interface BookingInquiry {
 }
 
 /**
- * Check if Google sync is configured
+ * Always true — kept for backward compatibility. Previously gated calls when
+ * `NEXT_PUBLIC_GOOGLE_SCRIPT_URL` was missing; now we always call our own API.
  */
-export const isGoogleSyncEnabled = (): boolean => {
-  return !!GOOGLE_SCRIPT_URL && GOOGLE_SCRIPT_URL !== '';
-};
+export const isGoogleSyncEnabled = (): boolean => true;
 
-/**
- * Parse event time string (e.g., "7:00 PM") into hour, minute, period
- */
-const parseEventTime = (timeStr: string): { hour: string; minute: string; period: string } => {
-  const defaultTime = { hour: '7', minute: '00', period: 'PM' };
-  if (!timeStr) return defaultTime;
+const json = { 'Content-Type': 'application/json' };
 
-  // Match "7:00 PM" or "19:00" or "7:00PM" formats
-  const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-  if (!match) return defaultTime;
-
-  let hour = parseInt(match[1]);
-  const minute = match[2];
-  let period = match[3]?.toUpperCase() || '';
-
-  // If no AM/PM specified, determine from hour
-  if (!period) {
-    if (hour >= 12 && hour < 24) {
-      period = 'PM';
-      if (hour > 12) hour = hour - 12;
-    } else {
-      period = 'AM';
-      if (hour === 0) hour = 12;
-    }
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    cache: 'no-store',
+    ...init,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
+  return (await res.json()) as T;
+}
 
-  return { hour: String(hour), minute, period };
-};
+// =============================================================================
+// INVOICE NUMBERS
+// =============================================================================
 
-/**
- * Extract date only from ISO timestamp or date string
- * Handles: "2026-03-07T16:00:00.000Z" -> "2026-03-07"
- *          "2026-03-07" -> "2026-03-07"
- */
-const extractDateOnly = (dateStr: unknown): string => {
-  if (!dateStr) return '';
-  const str = String(dateStr);
-  // Handle ISO format with T separator
-  if (str.includes('T')) {
-    return str.split('T')[0];
-  }
-  // Already in YYYY-MM-DD format or other format
-  return str;
-};
-
-/**
- * Latest invoice number response from Apps Script
- */
 export interface LatestInvoiceNumber {
   success: boolean;
   nextQuotation: string;
@@ -246,9 +201,6 @@ export interface LatestInvoiceNumber {
   error?: string;
 }
 
-/**
- * Fetch the latest invoice/quotation numbers from Google Sheets
- */
 export const fetchLatestInvoiceNumber = async (): Promise<LatestInvoiceNumber> => {
   const year = new Date().getFullYear();
   const fallback: LatestInvoiceNumber = {
@@ -258,414 +210,203 @@ export const fetchLatestInvoiceNumber = async (): Promise<LatestInvoiceNumber> =
     latestQuoNum: 0,
     latestInvNum: 0,
   };
-
-  if (!isGoogleSyncEnabled()) {
-    console.log('[InvoiceNumber] Google sync not configured, using fallback');
-    return fallback;
-  }
-
   try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getLatestInvoiceNumber`;
-    console.log('[InvoiceNumber] Fetching from:', url);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      console.log('[InvoiceNumber] Got:', data);
-      return {
-        success: true,
-        nextQuotation: data.nextQuotation || fallback.nextQuotation,
-        nextInvoice: data.nextInvoice || fallback.nextInvoice,
-        latestQuoNum: data.latestQuoNum || 0,
-        latestInvNum: data.latestInvNum || 0,
-      };
-    }
-
-    return fallback;
-  } catch (error) {
-    console.error('[InvoiceNumber] Error:', error);
+    const data = await fetchJson<LatestInvoiceNumber>('/api/invoices/latest-number');
+    return { ...fallback, ...data, success: !!data.success };
+  } catch (err) {
+    console.error('[InvoiceNumber] Error:', err);
     return fallback;
   }
 };
 
-/**
- * Sync status type for UI
- */
+// =============================================================================
+// INVOICES
+// =============================================================================
+
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
 
-/**
- * Fetch all invoices from Google Sheets
- * Returns array of StoredInvoice objects or null if fetch fails
- */
-export const fetchInvoicesFromCloud = async (): Promise<{ success: boolean; invoices: StoredInvoice[]; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    console.log('[Fetch] Google sync not configured');
-    return { success: false, invoices: [], error: 'Google sync not configured' };
-  }
-
+export const fetchInvoicesFromCloud = async (): Promise<{
+  success: boolean;
+  invoices: StoredInvoice[];
+  error?: string;
+}> => {
   try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getInvoices`;
-    console.log('[Fetch] Fetching from:', url);
+    const data = await fetchJson<{ success: boolean; invoices: StoredInvoice[]; error?: string }>(
+      '/api/invoices'
+    );
+    const list = (data.invoices ?? []).map(migrateInvoiceStatus);
+    return { success: data.success !== false, invoices: list, error: data.error };
+  } catch (err) {
+    console.error('[Fetch] Error:', err);
+    return { success: false, invoices: [], error: String(err) };
+  }
+};
 
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
+export const saveInvoiceToGoogle = async (
+  invoice: StoredInvoice
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const data = await fetchJson<{ success: boolean; error?: string }>('/api/invoices', {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify(invoice),
     });
+    return { success: !!data.success, error: data.error };
+  } catch (err) {
+    console.error('Error saving invoice:', err);
+    return { success: false, error: String(err) };
+  }
+};
 
-    console.log('[Fetch] Response status:', response.status, response.statusText);
-
-    if (response.ok) {
-      const text = await response.text();
-      console.log('[Fetch] Response body:', text.substring(0, 500));
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (parseError) {
-        console.error('[Fetch] JSON parse error:', parseError);
-        return { success: false, invoices: [], error: 'Invalid JSON: ' + text.substring(0, 100) };
+export const syncAllInvoices = async (
+  invoices: StoredInvoice[]
+): Promise<{ success: boolean; saved?: number; error?: string }> => {
+  try {
+    const data = await fetchJson<{ success: boolean; saved?: number; error?: string }>(
+      '/api/invoices',
+      {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify(invoices),
       }
-
-      // Valid status values (including legacy for backward compat)
-      const validStatuses = [
-        'quotation_draft', 'quotation_sent', 'deposit_received', 'invoice_sent',
-        'balance_paid', 'completed', 'archived', 'cancelled',
-        // Legacy statuses
-        'draft', 'sent', 'paid'
-      ];
-
-      // The Apps Script returns invoices with camelCase keys
-      // Map them to ensure all required fields exist
-      const invoices: StoredInvoice[] = (data.invoices || data || []).map((inv: Record<string, unknown>) => {
-        // Parse event time from "7:00 PM" format to separate fields
-        const eventTimeStr = String(inv.eventTime || '');
-        const timeParts = parseEventTime(eventTimeStr);
-
-        // Determine status with fallback for legacy values
-        const rawStatus = String(inv.status || 'quotation_draft');
-        const status = validStatuses.includes(rawStatus) ? rawStatus : 'quotation_draft';
-
-        return {
-          id: String(inv.id || inv.invoiceNumber || ''),
-          invoiceNumber: String(inv.invoiceNumber || ''),
-          documentType: (inv.documentType === 'invoice' ? 'invoice' : 'quotation') as 'quotation' | 'invoice',
-          clientName: String(inv.clientName || ''),
-          clientPhone: String(inv.clientPhone || ''),
-          clientEmail: String(inv.clientEmail || ''),
-          clientAddress: String(inv.clientAddress || ''),
-          eventType: String(inv.eventType || ''),
-          eventDate: extractDateOnly(inv.eventDate),
-          eventTimeHour: String(inv.eventTimeHour || timeParts.hour || '7'),
-          eventTimeMinute: String(inv.eventTimeMinute || timeParts.minute || '00'),
-          eventTimePeriod: String(inv.eventTimePeriod || timeParts.period || 'PM'),
-          // Note: Sheet column is "Venue" -> "venue" in camelCase
-          eventVenue: String(inv.eventVenue || inv.venue || ''),
-          items: Array.isArray(inv.items) ? inv.items : [],
-          discount: Number(inv.discount) || 0,
-          discountType: (inv.discountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent',
-          depositRequested: inv.depositRequested ? Number(inv.depositRequested) : undefined,
-          depositPaid: Number(inv.depositPaid) || 0,
-          total: Number(inv.total) || 0,
-          createdAt: String(inv.createdAt || new Date().toISOString()),
-          status: status as InvoiceStatus,
-          // Fix: Google Sheets column "Linked Quotation" becomes "linkedQuotation" in camelCase
-          linkedQuotationNumber: (inv.linkedQuotation || inv.linkedQuotationNumber) ? String(inv.linkedQuotation || inv.linkedQuotationNumber) : undefined,
-          convertedAt: inv.convertedAt ? String(inv.convertedAt) : undefined,
-          deletedAt: inv.deletedAt ? String(inv.deletedAt) : undefined,
-          // Lead source tracking
-          leadSource: (inv.leadSource ? String(inv.leadSource) : undefined) as LeadSource | undefined,
-          collaborationPartner: inv.collaborationPartner ? String(inv.collaborationPartner) : undefined,
-          // NEW: Payment tracking fields
-          paymentStatus: (inv.paymentStatus ? String(inv.paymentStatus) : 'none') as PaymentStatus,
-          depositReceivedDate: inv.depositReceivedDate ? String(inv.depositReceivedDate) : undefined,
-          balanceReceivedDate: inv.balanceReceivedDate ? String(inv.balanceReceivedDate) : undefined,
-          // NEW: Lifecycle tracking fields
-          calendarCreated: inv.calendarCreated === 'TRUE' || inv.calendarCreated === true,
-          calendarEventId: inv.calendarEventId ? String(inv.calendarEventId) : undefined,
-          invoiceSentDate: inv.invoiceSentDate ? String(inv.invoiceSentDate) : undefined,
-          receiptSentDate: inv.receiptSentDate ? String(inv.receiptSentDate) : undefined,
-          eventCompletedDate: inv.eventCompletedDate ? String(inv.eventCompletedDate) : undefined,
-          feedbackStatus: (inv.feedbackStatus ? String(inv.feedbackStatus) : 'pending') as FeedbackStatus,
-        };
-      });
-
-      // Apply migration to convert legacy statuses
-      const migratedInvoices = invoices.map(migrateInvoiceStatus);
-
-      return { success: true, invoices: migratedInvoices };
-    }
-
-    const errorText = await response.text();
-    console.error('[Fetch] Error response:', response.status, errorText);
-    return { success: false, invoices: [], error: `HTTP ${response.status}: ${errorText.substring(0, 100)}` };
-  } catch (error) {
-    console.error('[Fetch] Network error:', error);
-    return { success: false, invoices: [], error: String(error) };
+    );
+    return { success: !!data.success, saved: data.saved, error: data.error };
+  } catch (err) {
+    console.error('[Sync] Error:', err);
+    return { success: false, error: String(err) };
   }
 };
 
-/**
- * Save invoice to Google Sheets
- */
-export const saveInvoiceToGoogle = async (invoice: StoredInvoice): Promise<{ success: boolean; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    console.log('Google sync not configured');
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  try {
-    // Use GET with URL params for better CORS compatibility
-    const params = new URLSearchParams({
-      action: 'saveInvoice',
-      data: JSON.stringify(invoice),
-    });
-
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return { success: result.success, error: result.error };
-    }
-
-    return { success: true }; // Assume success if we got a response
-  } catch (error) {
-    console.error('Error saving to Google:', error);
-    // Still return success - the request was likely sent
-    return { success: true, error: 'Request sent but response unclear' };
-  }
-};
-
-/**
- * Create calendar event with reminders
- */
-export const createCalendarEvent = async (event: CalendarEvent): Promise<{ success: boolean; eventId?: string; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  try {
-    const params = new URLSearchParams({
-      action: 'createCalendarEvent',
-      data: JSON.stringify(event),
-    });
-
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return { success: result.success, eventId: result.eventId, error: result.error };
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error creating calendar event:', error);
-    return { success: true, error: 'Request sent but response unclear' };
-  }
-};
-
-/**
- * Sync all invoices to Google Sheets (batch)
- */
-export const syncAllInvoices = async (invoices: StoredInvoice[]): Promise<{ success: boolean; saved?: number; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  try {
-    const params = new URLSearchParams({
-      action: 'saveInvoices',
-      data: JSON.stringify(invoices),
-    });
-
-    const url = `${GOOGLE_SCRIPT_URL}?${params}`;
-    console.log('[Sync] Sending to:', url.substring(0, 100) + '...');
-    console.log('[Sync] Invoices count:', invoices.length);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    console.log('[Sync] Response status:', response.status, response.statusText);
-
-    if (response.ok) {
-      const text = await response.text();
-      console.log('[Sync] Response body:', text);
-
-      try {
-        const result = JSON.parse(text);
-        return { success: result.success !== false, saved: invoices.length, error: result.error };
-      } catch (parseError) {
-        console.error('[Sync] JSON parse error:', parseError);
-        return { success: false, error: 'Invalid JSON response: ' + text.substring(0, 100) };
-      }
-    }
-
-    const errorText = await response.text();
-    console.error('[Sync] Error response:', errorText);
-    return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 100)}` };
-  } catch (error) {
-    console.error('[Sync] Network error:', error);
-    return { success: false, error: 'Network error: ' + String(error) };
-  }
-};
-
-/**
- * Get all calendar events (for dashboard display)
- * Returns events with title, date, and venue
- */
-export const getCalendarEvents = async (): Promise<CalendarEventInfo[]> => {
-  if (!isGoogleSyncEnabled()) {
-    return [];
-  }
-
-  try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getEvents`;
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return Array.isArray(result) ? result : (result.events || []);
-    }
-
-    return [];
-  } catch (error) {
-    console.error('Error getting calendar events:', error);
-    return [];
-  }
-};
-
-/**
- * Get availability for a specific month
- */
-export const getAvailability = async (month: number, year: number): Promise<AvailabilityData | null> => {
-  if (!isGoogleSyncEnabled()) {
-    return null;
-  }
-
-  try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getAvailability&month=${month}&year=${year}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return {
-        month,
-        year,
-        bookedDates: result.bookedDates || [],
-      };
-    }
-
-    return {
-      month,
-      year,
-      bookedDates: [],
-    };
-  } catch (error) {
-    console.error('Error getting availability:', error);
-    return null;
-  }
-};
-
-/**
- * Save booking inquiry from website form
- * Creates a draft quotation automatically
- */
-export const saveBookingInquiry = async (
-  inquiry: BookingInquiry
-): Promise<{ success: boolean; inquiryId?: string; quotationNumber?: string; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    console.log('Google sync not configured - inquiry not saved to cloud');
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  try {
-    const params = new URLSearchParams({
-      action: 'saveBookingInquiry',
-      data: JSON.stringify(inquiry),
-    });
-
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return {
-        success: result.success,
-        inquiryId: result.inquiryId,
-        quotationNumber: result.quotationNumber,
-        error: result.error,
-      };
-    }
-
-    // Fallback if response not ok
-    const year = new Date().getFullYear();
-    const timestamp = Date.now().toString().slice(-4);
-    return {
-      success: true,
-      inquiryId: `INQ-${Date.now()}`,
-      quotationNumber: `QUO-${year}-${timestamp}`,
-    };
-  } catch (error) {
-    console.error('Error saving inquiry:', error);
-    return { success: true, error: 'Request sent but response unclear' };
-  }
-};
-
-/**
- * Update invoice status
- */
 export const updateInvoiceStatus = async (
   invoiceNumber: string,
-  status: StoredInvoice['status']
+  status: InvoiceStatus
 ): Promise<{ success: boolean; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, error: 'Google sync not configured' };
-  }
-
   try {
-    await fetch(GOOGLE_SCRIPT_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        action: 'updateInvoiceStatus',
-        invoiceNumber,
-        status,
-      }),
-      mode: 'no-cors',
-    });
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error updating status:', error);
-    return { success: false, error: String(error) };
+    const data = await fetchJson<{ success: boolean; error?: string }>(
+      `/api/invoices/${encodeURIComponent(invoiceNumber)}`,
+      {
+        method: 'PATCH',
+        headers: json,
+        body: JSON.stringify({ status }),
+      }
+    );
+    return { success: !!data.success, error: data.error };
+  } catch (err) {
+    console.error('Error updating status:', err);
+    return { success: false, error: String(err) };
   }
 };
 
 // =============================================================================
-// CONFIG MANAGEMENT
+// CALENDAR
 // =============================================================================
+
+export const createCalendarEvent = async (
+  event: CalendarEvent
+): Promise<{ success: boolean; eventId?: string; error?: string }> => {
+  try {
+    const data = await fetchJson<{ success: boolean; eventId?: string; error?: string }>(
+      '/api/calendar/events',
+      {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify(event),
+      }
+    );
+    return data;
+  } catch (err) {
+    console.error('Error creating calendar event:', err);
+    return { success: false, error: String(err) };
+  }
+};
+
+export const getCalendarEvents = async (): Promise<CalendarEventInfo[]> => {
+  try {
+    const res = await fetch('/api/calendar/events', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as CalendarEventInfo[] | { events?: CalendarEventInfo[] };
+    return Array.isArray(data) ? data : data.events ?? [];
+  } catch (err) {
+    console.error('Error getting calendar events:', err);
+    return [];
+  }
+};
+
+export const getAvailability = async (
+  month: number,
+  year: number
+): Promise<AvailabilityData | null> => {
+  try {
+    const data = await fetchJson<{ bookedDates?: string[] }>(
+      `/api/calendar/availability?month=${month}&year=${year}`
+    );
+    return { month, year, bookedDates: data.bookedDates ?? [] };
+  } catch (err) {
+    console.error('Error getting availability:', err);
+    return { month, year, bookedDates: [] };
+  }
+};
+
+// =============================================================================
+// INQUIRIES & SUBSCRIBERS
+// =============================================================================
+
+export const saveBookingInquiry = async (
+  inquiry: BookingInquiry
+): Promise<{
+  success: boolean;
+  inquiryId?: string;
+  quotationNumber?: string;
+  error?: string;
+}> => {
+  try {
+    const data = await fetchJson<{
+      success: boolean;
+      inquiryId?: string;
+      quotationNumber?: string;
+      error?: string;
+    }>('/api/inquiries', {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify(inquiry),
+    });
+    return data;
+  } catch (err) {
+    console.error('Error saving inquiry:', err);
+    return { success: false, error: String(err) };
+  }
+};
+
+export const saveNotificationSubscriber = async (
+  phone: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const data = await fetchJson<{ success: boolean; error?: string }>('/api/subscribers', {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ phone }),
+    });
+    return data;
+  } catch (err) {
+    console.error('[Subscriber] Error:', err);
+    return { success: false, error: String(err) };
+  }
+};
+
+// =============================================================================
+// CONFIG
+// =============================================================================
+
+export interface SiteConfigFeatures {
+  showPortfolio?: boolean;
+  showCollaborators?: boolean;
+  showDigitalProducts?: boolean;
+  showProductLaunchNotify?: boolean;
+  showSongCatalog?: boolean;
+}
 
 export interface SiteConfigData {
   business_name?: string;
@@ -681,6 +422,7 @@ export interface SiteConfigData {
   banking_bank?: string;
   banking_accountName?: string;
   banking_accountNumber?: string;
+  features?: SiteConfigFeatures;
   packages?: Array<{
     id: string;
     name: string;
@@ -712,167 +454,35 @@ export interface SiteConfigData {
   terms_latePayment?: string;
 }
 
-/**
- * Fetch configuration from Google Sheets
- */
-export const fetchConfig = async (): Promise<{ success: boolean; config: SiteConfigData; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, config: {}, error: 'Google sync not configured' };
-  }
-
+export const fetchConfig = async (): Promise<{
+  success: boolean;
+  config: SiteConfigData;
+  error?: string;
+}> => {
   try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getConfig`;
-    console.log('[Config] Fetching from:', url);
+    const data = await fetchJson<{ success: boolean; config: SiteConfigData; error?: string }>(
+      '/api/config'
+    );
+    return { success: data.success !== false, config: data.config ?? {}, error: data.error };
+  } catch (err) {
+    console.error('[Config] Error:', err);
+    return { success: false, config: {}, error: String(err) };
+  }
+};
 
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
+export const saveConfigToGoogle = async (
+  config: SiteConfigData
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const data = await fetchJson<{ success: boolean; error?: string }>('/api/config', {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ data: config }),
     });
-
-    if (response.ok) {
-      const data = await response.json();
-      console.log('[Config] Got:', data);
-      return {
-        success: true,
-        config: data.config || {},
-      };
-    }
-
-    return { success: false, config: {}, error: 'Failed to fetch config' };
-  } catch (error) {
-    console.error('[Config] Error:', error);
-    return { success: false, config: {}, error: String(error) };
-  }
-};
-
-/**
- * Normalize config for comparison (sort object keys so equivalent configs stringify the same).
- */
-function normalizedConfigString(c: SiteConfigData): string {
-  return JSON.stringify(sortObjectKeys(c));
-}
-function sortObjectKeys(obj: unknown): unknown {
-  if (obj === null || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
-  const sorted: Record<string, unknown> = {};
-  for (const k of Object.keys(obj).sort()) {
-    sorted[k] = sortObjectKeys((obj as Record<string, unknown>)[k]);
-  }
-  return sorted;
-}
-
-/**
- * Save a single config chunk to Google Sheets (backend merges by key).
- * Large chunks are sent via our API proxy (POST) to avoid CORS and URL length limits.
- * Small chunks use GET to the script URL directly.
- */
-const saveConfigChunk = async (chunk: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
-  const payload = JSON.stringify({ action: 'saveConfig', data: chunk });
-  const usePost = payload.length > 1800; // POST for large chunks to avoid redirect URL limits
-
-  if (usePost) {
-    // Browser POST to Apps Script is blocked by CORS; proxy via our API (server-side POST has no CORS).
-    const proxyUrl = '/api/google-sync/save-config';
-    try {
-      const response = await fetch(proxyUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: chunk }),
-        redirect: 'follow',
-      });
-      if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
-      const result = await response.json();
-      return { success: result.success !== false, error: result.error };
-    } catch (postErr) {
-      console.warn('[Config] Proxy POST failed, trying GET for chunk:', postErr);
-    }
-  }
-
-  const params = new URLSearchParams({
-    action: 'saveConfig',
-    data: JSON.stringify(chunk),
-  });
-  const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-    method: 'GET',
-    redirect: 'follow',
-  });
-  if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
-  const result = await response.json();
-  return { success: result.success !== false, error: result.error };
-};
-
-/**
- * On reported failure, refetch config and compare to what we sent. If equal, treat as success.
- */
-const verifyConfigSaved = async (config: SiteConfigData): Promise<boolean> => {
-  const fetched = await fetchConfig();
-  if (!fetched.success || !fetched.config) return false;
-  return normalizedConfigString(config) === normalizedConfigString(fetched.config);
-};
-
-/**
- * Save configuration to Google Sheets.
- * Splits into up to 3 GET requests (rest, packages, addons) to stay under URL length limits.
- * On any chunk failure: retry that chunk once, then if still failing verify by refetch; if stored equals sent, return success.
- */
-export const saveConfigToGoogle = async (config: SiteConfigData): Promise<{ success: boolean; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  const runWithRetry = async (chunk: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
-    const r = await saveConfigChunk(chunk);
-    if (r.success) return r;
-    const retry = await saveConfigChunk(chunk);
-    return retry;
-  };
-
-  try {
-    const { packages: configPackages, addons: configAddons, ...rest } = config;
-
-    const restChunk: Record<string, unknown> = { ...rest };
-    let r1 = await runWithRetry(restChunk);
-    if (!r1.success) {
-      console.error('[Config] Save error (rest):', r1.error);
-      if (await verifyConfigSaved(config)) {
-        console.log('[Config] Verify-after-save: stored config matches; treating as success');
-        return { success: true };
-      }
-      return { success: false, error: r1.error };
-    }
-
-    if (configPackages !== undefined) {
-      let r2 = await runWithRetry({ packages: configPackages });
-      if (!r2.success) {
-        console.error('[Config] Save error (packages):', r2.error);
-        if (await verifyConfigSaved(config)) {
-          console.log('[Config] Verify-after-save: stored config matches; treating as success');
-          return { success: true };
-        }
-        return { success: false, error: r2.error };
-      }
-    }
-
-    if (configAddons !== undefined) {
-      let r3 = await runWithRetry({ addons: configAddons });
-      if (!r3.success) {
-        console.error('[Config] Save error (addons):', r3.error);
-        if (await verifyConfigSaved(config)) {
-          console.log('[Config] Verify-after-save: stored config matches; treating as success');
-          return { success: true };
-        }
-        return { success: false, error: r3.error };
-      }
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('[Config] Save error:', error);
-    if (await verifyConfigSaved(config)) {
-      console.log('[Config] Verify-after-save: stored config matches; treating as success');
-      return { success: true };
-    }
-    return { success: false, error: String(error) };
+    return { success: !!data.success, error: data.error };
+  } catch (err) {
+    console.error('[Config] Error:', err);
+    return { success: false, error: String(err) };
   }
 };
 
@@ -909,100 +519,39 @@ export interface ConfigHistoryEntry {
   notes: string;
 }
 
-/**
- * Archive current config for a specific year
- */
-export const archiveConfig = async (year?: number): Promise<{ success: boolean; year?: number; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, error: 'Google sync not configured' };
-  }
-
+export const archiveConfig = async (
+  year?: number
+): Promise<{ success: boolean; year?: number; error?: string }> => {
   try {
-    const targetYear = year || new Date().getFullYear();
-    const params = new URLSearchParams({
-      action: 'archiveConfig',
-      year: String(targetYear),
-    });
-
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      return { success: result.success, year: result.year, error: result.error };
-    }
-
-    return { success: false, error: 'Failed to archive config' };
-  } catch (error) {
-    console.error('[ConfigHistory] Archive error:', error);
-    return { success: false, error: String(error) };
+    const data = await fetchJson<{ success: boolean; year?: number; error?: string }>(
+      '/api/config/archive',
+      {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ year: year ?? new Date().getFullYear() }),
+      }
+    );
+    return data;
+  } catch (err) {
+    console.error('[ConfigHistory] Archive error:', err);
+    return { success: false, error: String(err) };
   }
 };
 
-/**
- * Get all archived config history
- */
-export const fetchConfigHistory = async (): Promise<{ success: boolean; history: ConfigHistoryEntry[]; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    return { success: false, history: [], error: 'Google sync not configured' };
-  }
-
+export const fetchConfigHistory = async (): Promise<{
+  success: boolean;
+  history: ConfigHistoryEntry[];
+  error?: string;
+}> => {
   try {
-    const url = `${GOOGLE_SCRIPT_URL}?action=getConfigHistory`;
-    console.log('[ConfigHistory] Fetching from:', url);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      console.log('[ConfigHistory] Got:', data);
-      return {
-        success: true,
-        history: data.history || [],
-      };
-    }
-
-    return { success: false, history: [], error: 'Failed to fetch config history' };
-  } catch (error) {
-    console.error('[ConfigHistory] Error:', error);
-    return { success: false, history: [], error: String(error) };
-  }
-};
-
-/**
- * Save notification subscriber phone to Google Sheets
- */
-export const saveNotificationSubscriber = async (phone: string): Promise<{ success: boolean; error?: string }> => {
-  if (!isGoogleSyncEnabled()) {
-    console.log('[Subscriber] Google sync not configured, skipping');
-    return { success: false, error: 'Google sync not configured' };
-  }
-
-  try {
-    const params = new URLSearchParams({
-      action: 'saveSubscriber',
-      phone: phone,
-    });
-
-    const response = await fetch(`${GOOGLE_SCRIPT_URL}?${params}`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      console.log('[Subscriber] Saved:', result);
-      return { success: result.success, error: result.error };
-    }
-
-    return { success: false, error: 'Failed to save subscriber' };
-  } catch (error) {
-    console.error('[Subscriber] Error:', error);
-    return { success: false, error: String(error) };
+    const data = await fetchJson<{
+      success: boolean;
+      history: ConfigHistoryEntry[];
+      error?: string;
+    }>('/api/config/history');
+    return { success: data.success !== false, history: data.history ?? [], error: data.error };
+  } catch (err) {
+    console.error('[ConfigHistory] Error:', err);
+    return { success: false, history: [], error: String(err) };
   }
 };

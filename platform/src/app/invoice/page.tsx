@@ -278,10 +278,21 @@ function InvoiceGeneratorContent() {
 
   // Check if already authenticated (shared auth)
   useEffect(() => {
-    if (checkAuth()) {
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false); // Done checking
+    let active = true;
+    (async () => {
+      if (checkAuth()) {
+        if (active) setIsAuthenticated(true);
+      }
+      const { verifyAuthWithServer } = await import('@/lib/auth');
+      const ok = await verifyAuthWithServer();
+      if (active) {
+        setIsAuthenticated(ok);
+        setIsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Track latest invoice numbers from cloud
@@ -412,9 +423,10 @@ function InvoiceGeneratorContent() {
     loadInvoices();
   }, [isInitialLoad]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (doLogin(password)) {
+    const ok = await doLogin(password);
+    if (ok) {
       setIsAuthenticated(true);
       setError('');
     } else {
@@ -1149,11 +1161,6 @@ function InvoiceGeneratorContent() {
   const [historyWhatsAppMenu, setHistoryWhatsAppMenu] = useState<string | null>(null); // Track which invoice's WhatsApp menu is open
 
   const handleSyncToGoogle = async () => {
-    if (!isGoogleSyncEnabled()) {
-      alert('Google sync is not configured. Set NEXT_PUBLIC_GOOGLE_SCRIPT_URL in your environment.');
-      return;
-    }
-
     setIsSyncing(true);
     setSyncStatus('syncing');
     try {

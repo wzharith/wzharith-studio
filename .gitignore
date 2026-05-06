@@ -18,6 +18,10 @@ yarn-error.log*
 .env*.local
 .env
 
+# Google Cloud service account keys (never commit)
+wzharith-studio-ec65c18f7a71.json
+*-service-account*.json
+
 # Vercel
 .vercel
 

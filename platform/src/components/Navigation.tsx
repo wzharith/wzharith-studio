@@ -4,19 +4,25 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Menu, X, Music } from 'lucide-react';
 import { siteConfig } from '@/config/site.config';
+import type { ResolvedFeatures } from '@/lib/cloud-config';
 
 const navLinks = [
   { href: '#home', label: 'Home' },
   { href: '#about', label: 'About' },
-  { href: '#songs', label: 'Repertoire', showIf: 'showSongCatalog' },
+  { href: '#songs', label: 'Repertoire', showIf: 'showSongCatalog' as const },
   { href: '#packages', label: 'Packages' },
-  { href: '#portfolio', label: 'Portfolio', showIf: 'showPortfolio' },
+  { href: '#portfolio', label: 'Portfolio', showIf: 'showPortfolio' as const },
   { href: '#booking', label: 'Book Now' },
 ];
 
-export default function Navigation() {
+interface NavigationProps {
+  features?: ResolvedFeatures;
+}
+
+export default function Navigation({ features: featuresProp }: NavigationProps = {}) {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const features = featuresProp ?? siteConfig.features;
 
   useEffect(() => {
     const handleScroll = () => {
@@ -29,7 +35,8 @@ export default function Navigation() {
   // Filter nav links based on feature toggles
   const visibleLinks = navLinks.filter((link) => {
     if (!link.showIf) return true;
-    return siteConfig.features[link.showIf as keyof typeof siteConfig.features];
+    const key = link.showIf as keyof typeof features;
+    return Boolean(features[key]);
   });
 
   return (

@@ -5,8 +5,8 @@ import { useInView } from 'framer-motion';
 import { useRef } from 'react';
 import { Heart, Music2, Star, Users } from 'lucide-react';
 
-// Get basePath for GitHub Pages deployment
-const basePath = process.env.NODE_ENV === 'production' ? '/wzharith-studio' : '';
+// Custom-domain deploy (Vercel + wzharith.com); no basePath prefix needed.
+const basePath = '';
 
 const features = [
   {
