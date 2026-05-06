@@ -13,12 +13,34 @@ import { requireAuthRoute } from '@/lib/server-auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   if (!isCalendarConfigured()) {
     return NextResponse.json([]);
   }
   try {
-    const events = await listPerformanceEvents();
+    const url = new URL(request.url);
+    const date = url.searchParams.get('date'); // YYYY-MM-DD
+    const from = url.searchParams.get('from'); // YYYY-MM-DD
+    const to = url.searchParams.get('to'); // YYYY-MM-DD
+
+    // Backward compatible: no params = next 12 months
+    if (!date && !from && !to) {
+      const events = await listPerformanceEvents();
+      return NextResponse.json(events);
+    }
+
+    // date=YYYY-MM-DD → that single day (inclusive)
+    if (date) {
+      const start = new Date(`${date}T00:00:00+08:00`);
+      const end = new Date(`${date}T23:59:59+08:00`);
+      const events = await listPerformanceEvents(start, end);
+      return NextResponse.json(events);
+    }
+
+    // from/to range (inclusive); missing bound becomes defaults
+    const start = from ? new Date(`${from}T00:00:00+08:00`) : undefined;
+    const end = to ? new Date(`${to}T23:59:59+08:00`) : undefined;
+    const events = await listPerformanceEvents(start, end);
     return NextResponse.json(events);
   } catch (err) {
     console.error('[/api/calendar/events GET]', err);
